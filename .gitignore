@@ -1,0 +1,15 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/.gitkeep
+*.mp4
+*.wav
+*.srt
+*.ass
+.whisper_cache/
