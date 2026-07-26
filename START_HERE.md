@@ -1,5 +1,7 @@
 # 🚀 Start here (beginner checklist)
 
+No accounts. No API keys. Everything runs on your computer.
+
 ## A. One-time setup
 
 1. Install **Python 3.10+**
@@ -10,9 +12,7 @@
    source .venv/bin/activate      # Windows: .\\.venv\\Scripts\\Activate.ps1
    pip install -r requirements.txt
    ```
-4. Get a **free Gemini API key**: https://aistudio.google.com/apikey
-5. Copy `.env.example` to `.env` and paste your key
-6. Verify everything: `python scripts/check_setup.py`
+4. Verify everything: `python scripts/check_setup.py`
 
 ## B. Every time you use it
 
@@ -27,5 +27,4 @@
 
 - Test with a **2–5 minute** video first
 - Keep the Whisper model on **base** until you need more accuracy
-- Your key lives in `.env` — never commit it or share it
 - Old clips live in the **📚 Library** tab — no need to re-run jobs

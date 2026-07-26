@@ -1,5 +1,5 @@
 """
-ClipForge — AI Podcast Clipper (local web app)
+ClipForge — Podcast Clipper (local web app, no API keys)
 
 Run from the project folder:
     streamlit run app.py
@@ -9,7 +9,6 @@ Then open the URL shown in the terminal (usually http://localhost:8501)
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 import traceback
@@ -17,7 +16,6 @@ from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
-from dotenv import load_dotenv
 
 # Make scripts/ importable
 ROOT = Path(__file__).resolve().parent
@@ -36,11 +34,10 @@ from utils import (  # noqa: E402
     safe_name,
 )
 
-load_dotenv(ROOT / ".env")
 ensure_dirs()
 
 st.set_page_config(
-    page_title="ClipForge — AI Podcast Clipper",
+    page_title="ClipForge — Podcast Clipper",
     page_icon="✂️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -186,37 +183,22 @@ def sidebar() -> None:
         st.sidebar.error("FFmpeg missing")
         st.sidebar.caption(ff_msg)
 
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if key and key != "your_gemini_api_key_here":
-        st.sidebar.success("Gemini API key loaded")
-    else:
-        st.sidebar.warning("No Gemini API key found")
-        typed = st.sidebar.text_input(
-            "Paste your Gemini API key",
-            type="password",
-            help="Used only for this session. For a permanent setup, put it in a .env file.",
-        )
-        if typed.strip():
-            os.environ["GEMINI_API_KEY"] = typed.strip()
-            st.sidebar.success("Key set for this session")
-        st.sidebar.markdown(
-            "[Get a free key at Google AI Studio](https://aistudio.google.com/apikey)"
-        )
+    st.sidebar.success("No API keys needed — everything runs locally")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### How it works")
     st.sidebar.markdown(
         """
 1. **Whisper** transcribes on your computer
-2. **Gemini** (free tier) picks viral moments
+2. A **built-in scoring engine** picks the best moments
 3. **FFmpeg** cuts clips + burns captions
 4. You download and post 🚀
 
-Only the transcript text is sent to Gemini — the video never leaves your machine.
+100% offline — nothing ever leaves your machine.
 """
     )
     st.sidebar.markdown("---")
-    st.sidebar.caption("ClipForge · local · $0 stack")
+    st.sidebar.caption("ClipForge · 100% local · no API keys")
 
 
 def render_clips(clips: list[dict], key_prefix: str) -> None:
@@ -382,7 +364,6 @@ def tab_create() -> None:
                 help="tiny/base = faster. small/medium = more accurate, slower.",
             )
             language = st.text_input("Language code (blank = auto-detect)", placeholder="e.g. en")
-            gemini_model = st.text_input("Gemini model id", value="gemini-2.0-flash")
 
         has_source = uploaded is not None or bool(youtube_url.strip())
         generate = st.button(
@@ -406,19 +387,9 @@ def tab_create() -> None:
             st.session_state.job_result = None
 
             ok_ff, ff_msg = check_ffmpeg()
-            key = os.getenv("GEMINI_API_KEY", "").strip()
             if not ok_ff:
                 st.session_state.last_error = ff_msg
                 status_box.error(ff_msg)
-                st.stop()
-            if not key or key == "your_gemini_api_key_here":
-                msg = (
-                    "Missing GEMINI_API_KEY. Paste it in the sidebar, or create a `.env` file with:\n\n"
-                    "GEMINI_API_KEY=your_real_key_here\n\n"
-                    "Get a free key: https://aistudio.google.com/apikey"
-                )
-                st.session_state.last_error = msg
-                status_box.error(msg)
                 st.stop()
 
             def on_progress(msg: str, pct: float) -> None:
@@ -456,7 +427,6 @@ def tab_create() -> None:
                     language=language.strip() or None,
                     existing_transcript=tx_path,
                     burn_captions_flag=burn_captions,
-                    gemini_model=gemini_model.strip() or "gemini-2.0-flash",
                     aspect=aspect,
                     watermark=watermark.strip() or None,
                     normalize_audio=normalize_audio,
@@ -587,9 +557,9 @@ def tab_help() -> None:
 **First-time setup**
 1. Install Python 3.10+ and FFmpeg
 2. `pip install -r requirements.txt`
-3. Get a free Gemini key at [Google AI Studio](https://aistudio.google.com/apikey)
-4. Copy `.env.example` → `.env` and paste your key (or paste it in the sidebar)
-5. `streamlit run app.py`
+3. `streamlit run app.py`
+
+No accounts or API keys needed — everything runs on your computer.
 
 **Tips**
 - Test with a **short** video first (2–5 min). Whisper on a 2-hour episode takes a while on a laptop.
@@ -601,9 +571,7 @@ def tab_help() -> None:
 | Symptom | Fix |
 |---|---|
 | `ffmpeg: command not found` | Install FFmpeg, reopen terminal |
-| `Missing GEMINI_API_KEY` | Paste key in sidebar or create `.env` |
 | Whisper is slow / out of memory | Use a shorter video or `tiny`/`base` model |
-| Gemini quota errors | Wait and retry — the app already retries 3× |
 | Watermark missing | Some FFmpeg builds lack libass; clips still render without it |
 """
     )
@@ -617,13 +585,13 @@ def main() -> None:
         """
 <div class="cf-hero">
   <div>
-    <span class="cf-pill">🔒 100% local video</span>
-    <span class="cf-pill">💸 Free-tier stack</span>
+    <span class="cf-pill">🔒 100% local & private</span>
+    <span class="cf-pill">🔑 No API keys</span>
     <span class="cf-pill">📱 TikTok · Reels · Shorts</span>
   </div>
   <h1>ClipForge</h1>
-  <p>Drop in a long podcast — AI finds the most viral moments, cuts styled vertical clips,
-  burns captions, and writes your post captions. Ready to publish.</p>
+  <p>Drop in a long podcast — ClipForge finds the most shareable moments, cuts styled vertical clips,
+  burns captions, and writes your post captions. No accounts, no keys, nothing leaves your machine.</p>
 </div>
 """,
         unsafe_allow_html=True,

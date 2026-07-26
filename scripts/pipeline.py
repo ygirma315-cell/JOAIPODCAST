@@ -1,4 +1,7 @@
-"""Run the full local pipeline: transcribe → viral → cut → captions."""
+"""Run the full local pipeline: transcribe → find moments → cut → captions.
+
+Everything runs on your machine. No AI services, no API keys.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +30,6 @@ def run_pipeline(
     existing_transcript: Path | None = None,
     burn_captions_flag: bool = True,
     max_clips: int | None = None,
-    gemini_model: str = "gemini-2.0-flash",
     aspect: str = DEFAULT_ASPECT,
     watermark: str | None = None,
     normalize_audio: bool = False,
@@ -63,13 +65,12 @@ def run_pipeline(
     )
     report(f"Transcript ready ({len(transcript.get('segments') or [])} segments).", 0.30)
 
-    report("Asking Gemini to find viral moments...", 0.35)
+    report("Scoring the transcript for clip-worthy moments (offline)...", 0.35)
     viral = find_viral_moments(
         transcript_json,
         viral_json,
         top_n=top_n,
         target_seconds=target_seconds,
-        model_name=gemini_model,
     )
     report(f"Found {len(viral.get('segments') or [])} moments.", 0.50)
 

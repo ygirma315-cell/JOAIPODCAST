@@ -1,241 +1,218 @@
 """
-Phase 2 — Find viral moments with Google Gemini (free tier).
+Phase 2 — Find the best moments 100% locally (no AI service, no API key).
 
-Reads a timestamped transcript JSON and asks Gemini for the top viral segments
-as clean JSON (start/end, score, title, hook, social caption, hashtags, reason).
-Retries automatically on transient API errors.
+Scores every possible clip window from the transcript using signals that
+correlate with short-form performance:
+- hook phrases ("the truth is", "nobody tells you", "here's why", ...)
+- questions and exclamations
+- emotional / high-energy words
+- concrete numbers
+- quotable sentence length
+- speech density (words per second)
+
+Outputs the same JSON shape the rest of the pipeline expects, so cutting
+and captioning work unchanged. Runs entirely offline.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
 import sys
-import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-from utils import (
-    ensure_dirs,
-    format_timestamp,
-    load_json,
-    parse_timestamp,
-    project_root,
-    save_json,
-)
+from utils import ensure_dirs, format_timestamp, load_json, save_json
 
 
-SYSTEM_INSTRUCTIONS = """
-You are an expert short-form video editor and viral content strategist for
-TikTok, Instagram Reels, and YouTube Shorts.
+HOOK_PATTERNS: list[tuple[re.Pattern[str], float]] = [
+    (re.compile(p, re.IGNORECASE), w)
+    for p, w in [
+        (r"you won'?t believe", 6.0),
+        (r"nobody (talks about|tells you|knows)", 6.0),
+        (r"the (truth|secret|real reason|problem) (is|about)", 5.0),
+        (r"here'?s (the thing|why|how|what)", 5.0),
+        (r"biggest (mistake|lesson|myth|thing)", 5.0),
+        (r"stop (doing|trying|saying)", 5.0),
+        (r"changed my life", 5.0),
+        (r"blew my mind", 5.0),
+        (r"game.?changer", 4.5),
+        (r"what (if|happens when|nobody)", 4.0),
+        (r"why (you|people|most|everyone)", 4.0),
+        (r"never (do|say|trust|tell)", 4.0),
+        (r"the (best|worst) part", 3.5),
+        (r"most people (don'?t|never|think)", 3.5),
+        (r"let me tell you", 3.0),
+        (r"\bhow (to|i|we) ", 3.0),
+        (r"to be honest|honestly", 2.0),
+        (r"i (couldn'?t|didn'?t|never) (believe|expect|imagine)", 3.0),
+    ]
+]
 
-Given a podcast transcript with timestamps, pick the TOP viral-worthy moments.
+EMOTION_WORDS = {
+    "amazing", "insane", "crazy", "unbelievable", "shocking", "terrifying",
+    "incredible", "hilarious", "love", "hate", "fear", "scared", "angry",
+    "broke", "rich", "money", "success", "failure", "mistake", "secret",
+    "truth", "lie", "lies", "dangerous", "powerful", "weird", "huge",
+    "massive", "best", "worst", "free", "instantly", "proven", "wrong",
+    "nobody", "everybody", "literally", "actually", "finally", "obsessed",
+}
 
-Look for:
-- Strong hooks in the first 3 seconds of the segment
-- Emotional or controversial statements
-- Funny moments
-- Surprising facts
-- Quotable one-liners
-- Clear standalone stories that make sense without the full episode
+STOPWORDS = {
+    "the", "and", "that", "this", "with", "have", "from", "they", "were",
+    "been", "their", "would", "there", "which", "about", "could", "other",
+    "than", "then", "them", "these", "some", "what", "when", "your", "just",
+    "like", "know", "really", "going", "because", "think", "people", "thing",
+    "things", "very", "more", "much", "even", "also", "into", "over", "here",
+    "where", "most", "make", "want", "time", "right", "yeah", "okay", "kind",
+    "actually", "literally", "gonna", "want", "said", "says", "well", "mean",
+}
 
-Rules:
-1. Never cut mid-sentence. start_time and end_time must align to full sentences
-   from the transcript timestamps.
-2. Prefer segments that work as standalone clips.
-3. Return ONLY valid JSON (no markdown fences, no commentary).
-4. Times must be in seconds (numbers) AND as HH:MM:SS.mmm strings.
-5. virality_score is an integer 0-100.
-6. hashtags is an array of strings without spaces (e.g. \"#podcast\").
-7. reason is one clear sentence.
-8. hook is the single most scroll-stopping line from the segment,
-   suitable as on-screen text in the first seconds.
-9. social_caption is a ready-to-post caption (1-2 punchy sentences,
-   no hashtags inside it).
-"""
-
-
-def build_user_prompt(
-    transcript: dict[str, Any],
-    top_n: int,
-    target_seconds: int | None,
-) -> str:
-    lines = []
-    for seg in transcript.get("segments") or []:
-        lines.append(
-            f"[{seg.get('start_ts', format_timestamp(seg.get('start', 0)))} --> "
-            f"{seg.get('end_ts', format_timestamp(seg.get('end', 0)))}] "
-            f"{seg.get('text', '').strip()}"
-        )
-    body = "\n".join(lines)
-    length_rule = ""
-    if target_seconds:
-        length_rule = (
-            f"\nPrefer segments roughly {target_seconds} seconds long "
-            f"(acceptable range: {max(15, target_seconds - 15)}–{target_seconds + 20}s). "
-            f"Still never cut mid-sentence."
-        )
-
-    return f"""Analyze this timestamped podcast transcript and return the top {top_n} viral clips.
-{length_rule}
-
-Return JSON with this exact shape:
-{{
-  "segments": [
-    {{
-      "rank": 1,
-      "start": 12.5,
-      "end": 48.2,
-      "start_ts": "00:00:12.500",
-      "end_ts": "00:00:48.200",
-      "virality_score": 87,
-      "title": "Short punchy title",
-      "hook": "The single most scroll-stopping line.",
-      "social_caption": "Ready-to-post caption for TikTok/Reels/Shorts.",
-      "hashtags": ["#podcast", "#mindset"],
-      "reason": "One sentence on why this could go viral.",
-      "quote": "A short representative quote from the segment."
-    }}
-  ]
-}}
-
-TRANSCRIPT:
-{body}
-"""
+FILLER_START = re.compile(r"^(um+|uh+|so|yeah|like|you know|i mean)[,\s]+", re.IGNORECASE)
 
 
-def extract_json(text: str) -> dict[str, Any]:
-    """Parse JSON from model output, tolerating accidental markdown fences."""
-    text = text.strip()
-    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
-    if fence:
-        text = fence.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"Model did not return JSON. Raw output:\n{text[:2000]}")
-    return json.loads(text[start : end + 1])
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
 
 
-def snap_to_sentences(
-    start: float,
-    end: float,
-    transcript_segments: list[dict[str, Any]],
-) -> tuple[float, float, str]:
-    """
-    Expand/snap [start, end] so we only include full Whisper segments
-    (never cut mid-sentence). Returns (new_start, new_end, joined_text).
-    """
-    if not transcript_segments:
-        return start, end, ""
+def sentence_score(text: str) -> tuple[float, list[str]]:
+    """Score one transcript sentence. Returns (score, reasons)."""
+    t = _clean(text)
+    if not t:
+        return 0.0, []
+    low = t.lower()
+    words = low.split()
+    score = 1.0
+    reasons: list[str] = []
 
-    chosen = []
-    for seg in transcript_segments:
-        s = float(seg["start"])
-        e = float(seg["end"])
-        if e > start and s < end:
-            chosen.append(seg)
+    hook_weight = sum(w for p, w in HOOK_PATTERNS if p.search(low))
+    if hook_weight:
+        score += min(hook_weight, 8.0)
+        reasons.append("strong hook phrasing")
 
-    if not chosen:
-        nearest = min(
-            transcript_segments,
-            key=lambda seg: abs(float(seg["start"]) - start),
-        )
-        chosen = [nearest]
+    emo = sum(1 for w in words if w.strip(".,!?\"'()") in EMOTION_WORDS)
+    if emo:
+        score += min(emo * 1.5, 5.0)
+        reasons.append("emotional language")
 
-    new_start = float(chosen[0]["start"])
-    new_end = float(chosen[-1]["end"])
-    text = " ".join((c.get("text") or "").strip() for c in chosen).strip()
-    return new_start, new_end, text
+    if "?" in t:
+        score += 2.0
+        reasons.append("asks a question")
+    if "!" in t:
+        score += 1.5
+        reasons.append("high energy")
+    if re.search(r"\d", t):
+        score += 1.5
+        reasons.append("concrete numbers")
+
+    n = len(words)
+    if 6 <= n <= 30:
+        score += 1.0  # quotable length
+    elif n < 4:
+        score *= 0.5
+    return score, reasons
 
 
-def normalize_segments(
-    raw: dict[str, Any],
-    transcript: dict[str, Any],
-    top_n: int,
+def _window_candidates(
+    segments: list[dict[str, Any]],
+    target_seconds: float,
 ) -> list[dict[str, Any]]:
-    segs_in = raw.get("segments") or raw.get("clips") or []
-    tsegs = transcript.get("segments") or []
-    out: list[dict[str, Any]] = []
+    """Build one candidate window starting at every sentence."""
+    candidates: list[dict[str, Any]] = []
+    n = len(segments)
+    for i in range(n):
+        start = float(segments[i]["start"])
+        j = i
+        while j + 1 < n and float(segments[j]["end"]) - start < target_seconds * 0.9:
+            j += 1
+        end = float(segments[j]["end"])
+        duration = end - start
+        if duration < max(10.0, target_seconds * 0.35):
+            continue
 
-    for i, item in enumerate(segs_in[:top_n]):
-        start = parse_timestamp(item.get("start", item.get("start_ts", 0)))
-        end = parse_timestamp(item.get("end", item.get("end_ts", start)))
-        if end <= start:
-            end = start + 15.0
-        start, end, snapped_text = snap_to_sentences(start, end, tsegs)
-        score = item.get("virality_score", item.get("score", 50))
-        try:
-            score = int(score)
-        except (TypeError, ValueError):
-            score = 50
-        score = max(0, min(100, score))
-        hashtags = item.get("hashtags") or []
-        if isinstance(hashtags, str):
-            hashtags = [h for h in re.split(r"[\s,]+", hashtags) if h]
-        hashtags = [
-            h if str(h).startswith("#") else f"#{h}" for h in hashtags if str(h).strip()
-        ]
-        out.append(
+        total = 0.0
+        reason_counts: Counter[str] = Counter()
+        best_sentence = ""
+        best_sentence_score = -1.0
+        for k in range(i, j + 1):
+            s, rs = sentence_score(segments[k].get("text") or "")
+            if s > best_sentence_score:
+                best_sentence_score = s
+                best_sentence = _clean(segments[k].get("text") or "")
+            if k == i:
+                s *= 1.6  # the opening seconds decide if viewers stay
+            total += s
+            for r in rs:
+                reason_counts[r] += 1
+
+        words = sum(len((segments[k].get("text") or "").split()) for k in range(i, j + 1))
+        wps = words / duration if duration > 0 else 0.0
+        density_bonus = 2.0 if wps >= 2.2 else (1.0 if wps >= 1.6 else 0.0)
+
+        raw = (total / max(duration, 1.0)) * 10.0 + density_bonus
+        candidates.append(
             {
-                "rank": int(item.get("rank") or i + 1),
                 "start": start,
                 "end": end,
-                "start_ts": format_timestamp(start),
-                "end_ts": format_timestamp(end),
-                "duration": round(end - start, 3),
-                "virality_score": score,
-                "title": (item.get("title") or f"Clip {i + 1}").strip(),
-                "hook": (item.get("hook") or "").strip(),
-                "social_caption": (item.get("social_caption") or "").strip(),
-                "hashtags": hashtags,
-                "reason": (item.get("reason") or "").strip(),
-                "quote": (item.get("quote") or snapped_text[:180]).strip(),
-                "text": snapped_text,
+                "first": i,
+                "last": j,
+                "raw": raw,
+                "best_sentence": best_sentence,
+                "reasons": [r for r, _ in reason_counts.most_common(3)],
+                "text": " ".join(
+                    _clean(segments[k].get("text") or "") for k in range(i, j + 1)
+                ).strip(),
             }
         )
-    out.sort(key=lambda x: x["virality_score"], reverse=True)
-    for i, item in enumerate(out):
-        item["rank"] = i + 1
-    return out
+    return candidates
 
 
-def _generate_with_retries(
-    client: Any,
-    model_name: str,
-    prompt: str,
-    *,
-    attempts: int = 3,
-) -> dict[str, Any]:
-    """Call Gemini with exponential backoff on transient errors."""
-    last_err: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config={
-                    "system_instruction": SYSTEM_INSTRUCTIONS,
-                    "temperature": 0.4,
-                    "response_mime_type": "application/json",
-                },
-            )
-            text = getattr(response, "text", None) or str(response)
-            return extract_json(text)
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            if attempt < attempts - 1:
-                wait = 2 ** (attempt + 1)
-                print(f"Gemini attempt {attempt + 1} failed ({e}); retrying in {wait}s...")
-                time.sleep(wait)
-    raise RuntimeError(
-        f"Gemini failed after {attempts} attempts. Last error: {last_err}\n"
-        "Tips: check your API key, free-tier quota, and the model id."
+def _pick_top(
+    candidates: list[dict[str, Any]],
+    top_n: int,
+) -> list[dict[str, Any]]:
+    """Greedy selection of the highest-scoring non-overlapping windows."""
+    chosen: list[dict[str, Any]] = []
+    for cand in sorted(candidates, key=lambda c: c["raw"], reverse=True):
+        overlaps = False
+        for c in chosen:
+            inter = min(cand["end"], c["end"]) - max(cand["start"], c["start"])
+            if inter > 0.2 * (cand["end"] - cand["start"]):
+                overlaps = True
+                break
+        if not overlaps:
+            chosen.append(cand)
+        if len(chosen) >= top_n:
+            break
+    chosen.sort(key=lambda c: c["raw"], reverse=True)
+    return chosen
+
+
+def _make_title(sentence: str, max_len: int = 60) -> str:
+    t = FILLER_START.sub("", _clean(sentence)).strip(" ,.")
+    if not t:
+        return "Podcast moment"
+    t = t[0].upper() + t[1:]
+    if len(t) <= max_len:
+        return t
+    cut = t[:max_len].rsplit(" ", 1)[0]
+    return cut.rstrip(" ,.;:") + "…"
+
+
+def _hashtags(text: str, k: int = 3) -> list[str]:
+    words = [
+        w.strip(".,!?\"'()").lower()
+        for w in text.split()
+    ]
+    counts = Counter(
+        w for w in words if len(w) > 3 and w.isalpha() and w not in STOPWORDS
     )
+    tags = [f"#{w}" for w, _ in counts.most_common(k)]
+    for default in ("#podcast", "#clips"):
+        if default not in tags:
+            tags.append(default)
+    return tags[:5]
 
 
 def find_viral_moments(
@@ -244,47 +221,66 @@ def find_viral_moments(
     *,
     top_n: int = 5,
     target_seconds: int | None = 60,
-    model_name: str = "gemini-2.0-flash",
 ) -> dict[str, Any]:
-    load_dotenv(project_root() / ".env")
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key or api_key == "your_gemini_api_key_here":
-        raise RuntimeError(
-            "Missing GEMINI_API_KEY. Create a .env file in the project folder:\n"
-            "GEMINI_API_KEY=your_real_key\n"
-            "Get a free key: https://aistudio.google.com/apikey"
-        )
-
+    """Pick the top clip-worthy windows from a transcript. Fully offline."""
     transcript = load_json(Path(transcript_path))
-    if not transcript.get("segments"):
+    segments = transcript.get("segments") or []
+    if not segments:
         raise ValueError("Transcript has no segments.")
 
-    prompt = build_user_prompt(transcript, top_n=top_n, target_seconds=target_seconds)
+    target = float(target_seconds or 60)
+    candidates = _window_candidates(segments, target)
+    if not candidates:
+        raise ValueError(
+            "Video is too short to build clips — try a longer video "
+            "or a shorter target clip length."
+        )
+    chosen = _pick_top(candidates, top_n)
 
-    try:
-        from google import genai  # noqa: PLC0415
-    except ImportError as e:
-        raise RuntimeError(
-            "google-genai is not installed. Run:\n  pip install google-genai python-dotenv"
-        ) from e
+    raws = [c["raw"] for c in chosen]
+    lo, hi = min(raws), max(raws)
+    span = (hi - lo) or 1.0
 
-    client = genai.Client(api_key=api_key)
-    raw = _generate_with_retries(client, model_name, prompt)
-    segments = normalize_segments(raw, transcript, top_n=top_n)
+    out_segments: list[dict[str, Any]] = []
+    for idx, c in enumerate(chosen):
+        score = 55 + int(round(40 * (c["raw"] - lo) / span)) if len(chosen) > 1 else 80
+        hook = c["best_sentence"][:140].strip()
+        reason_bits = c["reasons"] or ["a dense, self-contained story"]
+        caption = hook.rstrip(".!?") if hook else _make_title(c["text"])
+        out_segments.append(
+            {
+                "rank": idx + 1,
+                "start": c["start"],
+                "end": c["end"],
+                "start_ts": format_timestamp(c["start"]),
+                "end_ts": format_timestamp(c["end"]),
+                "duration": round(c["end"] - c["start"], 3),
+                "virality_score": max(0, min(100, score)),
+                "title": _make_title(c["best_sentence"] or c["text"]),
+                "hook": hook,
+                "social_caption": caption + " 🎧",
+                "hashtags": _hashtags(c["text"]),
+                "reason": "Picked for " + ", ".join(reason_bits) + ".",
+                "quote": hook or c["text"][:180],
+                "text": c["text"],
+            }
+        )
 
     result = {
         "video": transcript.get("video"),
         "transcript": str(transcript_path),
-        "model": model_name,
+        "model": "local-heuristic-v1 (offline, no API)",
         "target_seconds": target_seconds,
-        "segments": segments,
+        "segments": out_segments,
     }
     save_json(Path(output_json), result)
     return result
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Find viral moments with Gemini")
+    parser = argparse.ArgumentParser(
+        description="Find clip-worthy moments locally (no API key needed)"
+    )
     parser.add_argument("transcript", help="Path to transcript JSON from Phase 1")
     parser.add_argument(
         "-o",
@@ -299,11 +295,6 @@ def main() -> None:
         default=60,
         help="Preferred clip length in seconds (default 60)",
     )
-    parser.add_argument(
-        "--model",
-        default="gemini-2.0-flash",
-        help="Gemini model id (default gemini-2.0-flash)",
-    )
     args = parser.parse_args()
 
     paths = ensure_dirs()
@@ -314,13 +305,12 @@ def main() -> None:
         else paths["outputs"] / f"{tpath.stem.replace('_transcript', '')}_viral.json"
     )
 
-    print(f"Analyzing: {tpath}")
+    print(f"Analyzing (offline): {tpath}")
     data = find_viral_moments(
         tpath,
         out,
         top_n=args.top,
         target_seconds=args.target_seconds,
-        model_name=args.model,
     )
     print(f"Saved: {out}")
     for seg in data["segments"]:
