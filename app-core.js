@@ -13,7 +13,7 @@ const WEIGHTS={audio_energy_mean:1.0,audio_energy_peak:1.2,audio_burst:1.5,audio
 const S={videoFile:null,videoURL:null,videoDuration:0,sentences:[],candidates:[],selected:[],dropped:new Set(),added:new Set(),audioEnergy:null,audioStats:null,
   opts:{target_s:60,count:5,aspect:"9:16",capTemplate:"none",capPos:"bottom",capSize:"m",captions:false,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},
   exporting:false,cancelExport:false};
-let ytReady=false,manualReady=false;
+let ytReady=false,manualReady=false,aiReady=false;
 
 /* ================= HELPERS ================= */
 const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
@@ -97,6 +97,41 @@ async function fetchYouTube(){const inp=$("#yt-url").value,st=$("#yt-status"),bt
   if(S.sentences.length){ytReady=true;st.textContent="\u2713 Transcript loaded \u2014 hit Use this!";return true;}
   return false;}
 
+/* ---- AI Auto-Transcribe (Deepgram speech-to-text on the uploaded video's audio) ---- */
+const DEEPGRAM_API_KEY="60b4a66f441c27464b94570702c75acd1ebf2f6f";
+async function decodeAudioBuffer(file){const ab=await file.arrayBuffer();const ctx=new(window.AudioContext||window.webkitAudioContext)();const audio=await ctx.decodeAudioData(ab);await ctx.close();return audio;}
+async function resampleTo16kMono(buffer){const targetRate=16000;const OfflineCtx=window.OfflineAudioContext||window.webkitOfflineAudioContext;const offline=new OfflineCtx(1,Math.max(1,Math.ceil(buffer.duration*targetRate)),targetRate);const src=offline.createBufferSource();src.buffer=buffer;src.connect(offline.destination);src.start(0);return await offline.startRendering();}
+function floatTo16BitPCM(float32){const buf=new ArrayBuffer(float32.length*2);const view=new DataView(buf);let offset=0;for(let i=0;i<float32.length;i++,offset+=2){let s=Math.max(-1,Math.min(1,float32[i]));view.setInt16(offset,s<0?s*0x8000:s*0x7FFF,true);}return buf;}
+function encodeWav(buffer){const numChannels=1,sampleRate=buffer.sampleRate;const samples=buffer.getChannelData(0);const pcm=floatTo16BitPCM(samples);const blockAlign=numChannels*2,byteRate=sampleRate*blockAlign,dataSize=pcm.byteLength,headerSize=44;
+  const wavBuf=new ArrayBuffer(headerSize+dataSize);const view=new DataView(wavBuf);
+  function writeStr(off,str){for(let i=0;i<str.length;i++)view.setUint8(off+i,str.charCodeAt(i));}
+  writeStr(0,"RIFF");view.setUint32(4,36+dataSize,true);writeStr(8,"WAVE");
+  writeStr(12,"fmt ");view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,numChannels,true);
+  view.setUint32(24,sampleRate,true);view.setUint32(28,byteRate,true);view.setUint16(32,blockAlign,true);view.setUint16(34,16,true);
+  writeStr(36,"data");view.setUint32(40,dataSize,true);
+  new Uint8Array(wavBuf,headerSize).set(new Uint8Array(pcm));
+  return new Blob([wavBuf],{type:"audio/wav"});}
+async function transcribeWithDeepgram(file,onStatus){
+  onStatus&&onStatus("Decoding audio track\u2026");
+  const decoded=await decodeAudioBuffer(file);
+  onStatus&&onStatus("Preparing audio for the AI (this can take a bit for long videos)\u2026");
+  const mono16k=await resampleTo16kMono(decoded);
+  const wavBlob=encodeWav(mono16k);
+  onStatus&&onStatus("Sending to speech-to-text AI\u2026");
+  const url="https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&utterances=true&language=en";
+  const res=await fetch(url,{method:"POST",headers:{"Authorization":"Token "+DEEPGRAM_API_KEY,"Content-Type":"audio/wav"},body:wavBlob});
+  if(!res.ok){let extra="";try{extra=(await res.text()).slice(0,180);}catch(e){}throw new Error("AI service returned "+res.status+(extra?" \u2014 "+extra:""));}
+  const data=await res.json();
+  const utter=data&&data.results&&data.results.utterances;
+  if(utter&&utter.length)return utter.map(u=>({start:u.start,end:u.end,text:(u.transcript||"").trim()})).filter(s=>s.text);
+  const alt=data&&data.results&&data.results.channels&&data.results.channels[0]&&data.results.channels[0].alternatives&&data.results.channels[0].alternatives[0];
+  const words=(alt&&alt.words)||[];
+  if(!words.length)return[];
+  const sents=[];let cur=[];
+  for(const w of words){cur.push(w);const pw=w.punctuated_word||w.word||"";if(/[.!?]$/.test(pw)||cur.length>28){sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});cur=[];}}
+  if(cur.length)sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});
+  return sents;}
+
 /* ================= STEP 3: OPTIONS ================= */
 function initOpts(){
   buildSegCtrl("#opt-duration",[30,60,90,120,180],["30 s","1 min","1.5 min","2 min","3 min"],"target_s",60);
@@ -118,7 +153,6 @@ function initOpts(){
 /* ================= SCORING ENGINE ================= */
 function tokenize(txt){return txt.toLowerCase().replace(/[^a-z0-9']/g," ").split(/\s+/).filter(Boolean).map(t=>t.replace(/[^a-z0-9]/g,"")).filter(t=>t&&!STOPWORDS.has(t));}
 function buildCorpus(sents){const docs=sents.map(s=>tokenize(s.text));const df={};for(const doc of docs){const seen=new Set(doc);for(const t of seen)df[t]=(df[t]||0)+1;}const n=Math.max(docs.length,1);const idf={};for(const[t,c]of Object.entries(df))idf[t]=Math.log(n/(1+c))+1;const vals=Object.values(idf);const meanIdf=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:1;const grams={};for(const doc of docs)for(let k=0;k<doc.length-2;k++){const g=doc[k]+"|"+doc[k+1]+"|"+doc[k+2];grams[g]=(grams[g]||0)+1;}const callbacks=new Set(Object.entries(grams).filter(([,c])=>c>=3).map(([g])=>g));return{idf,meanIdf,callbacks};}
-/* Regions are found with a wider lookahead so there is real material to trim down when compressing. */
 function buildCandidates(sents,targetS){const minLen=5,maxLen=targetS*1.7+20;const lookahead=Math.min(80,Math.max(12,Math.ceil(targetS/2)));const cands=[];for(let i=0;i<sents.length;i++){for(let j=i;j<Math.min(i+lookahead,sents.length);j++){const dur=sents[j].end-sents[i].start;if(dur>maxLen)break;if(dur>=minLen){const span=sents.slice(i,j+1),text=span.map(s=>s.text).join(" "),tokens=tokenize(text);cands.push({id:cands.length,sentLo:i,sentHi:j,start:sents[i].start,end:sents[j].end,duration:dur,text,tokens,sentences:span});}}}return cands;}
 function extractFeatures(c,corpus,totalDur,ae,ideal,astats){const low=c.text.toLowerCase(),f={};
   f.text_arousal=c.tokens.reduce((s,t)=>s+(AROUSAL[t]||0),0)/Math.max(c.tokens.length,1);
