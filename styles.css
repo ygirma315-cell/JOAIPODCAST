@@ -53,8 +53,13 @@ code { font-family:Menlo,Consolas,monospace; font-size:.9em; background:var(--so
 
 /* ---- ALERTS ---- */
 .alert { margin-top:12px; padding:12px 16px; border-radius:var(--radius); background:var(--red-soft); color:#8f3730; border:1px solid #f2c4bf; animation:popIn .3s ease both; font-size:14px; }
-.ios-warning { margin-top:12px; padding:14px 16px; border-radius:var(--radius); background:#FFF8E8; color:#7a5c00; border:1px solid #F5D98C; font-size:14px; line-height:1.5; animation:popIn .3s ease both; }
-.ios-warning strong { display:block; margin-bottom:4px; }
+
+/* ---- AI TRANSCRIBE BOX ---- */
+.ai-box { margin-top:16px; padding:20px 18px; border-radius:var(--radius-lg); background:linear-gradient(135deg,var(--blue-soft),#EFF7FF); border:1.5px solid var(--blue); box-shadow:var(--shadow-lg); animation:popIn .4s ease both; }
+.ai-box h3 { display:flex; align-items:center; gap:8px; margin:0; font-size:17px; flex-wrap:wrap; }
+.ai-box p { margin:6px 0 0; }
+.ai-box .btn { margin-top:14px; width:100%; }
+.badge { font-size:11px; font-weight:700; background:var(--blue); color:#fff; padding:3px 9px; border-radius:999px; letter-spacing:.02em; }
 
 /* ---- DROP ZONES ---- */
 .dropzone { margin-top:16px; padding:36px 20px; text-align:center; cursor:pointer; border:2px dashed var(--border); border-radius:var(--radius-lg); background:var(--soft); transition:all .22s ease; touch-action:manipulation; }
@@ -100,7 +105,6 @@ code { font-family:Menlo,Consolas,monospace; font-size:.9em; background:var(--so
 /* ---- FINAL VIDEO PLAYER ---- */
 #final-player {
   display:block; margin:0 auto;
-  /* Natural aspect ratio — no black bars */
   width:auto; max-width:100%; max-height:72vh;
   border-radius:var(--radius-lg);
   background:#000; border:1px solid var(--border);
@@ -123,7 +127,7 @@ code { font-family:Menlo,Consolas,monospace; font-size:.9em; background:var(--so
 
 /* ---- INPUTS ---- */
 textarea, input[type=text], input[type=password] {
-  width:100%; padding:12px 14px; font:inherit; font-size:16px; /* 16px prevents iOS zoom */
+  width:100%; padding:12px 14px; font:inherit; font-size:16px;
   border:1px solid var(--border); border-radius:var(--radius);
   resize:vertical; color:var(--text);
   transition:border-color .18s ease, box-shadow .18s ease;
@@ -132,7 +136,7 @@ textarea, input[type=text], input[type=password] {
 textarea:focus, input[type=text]:focus, input[type=password]:focus {
   outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(39,131,222,.15);
 }
-.or-divider { display:flex; align-items:center; gap:10px; margin:8px 0 4px; color:var(--text-2); font-size:13px; }
+.or-divider { display:flex; align-items:center; gap:10px; margin:16px 0 4px; color:var(--text-2); font-size:13px; }
 .or-divider::before, .or-divider::after { content:""; flex:1; height:1px; background:var(--border); }
 
 /* ---- TRANSCRIPT GRID ---- */
@@ -225,7 +229,6 @@ li.st-active .st-ic { background:var(--blue); color:#fff; animation:spinIc 1.4s 
 .login-btn { margin-top:4px; padding:14px; border:0; border-radius:10px; background:linear-gradient(135deg,#2783DE,#5AA7EC); color:#fff; font-size:16px; font-weight:800; cursor:pointer; transition:all .2s ease; box-shadow:0 8px 24px rgba(39,131,222,.45); min-height:48px; }
 #login-err { min-height:18px; font-size:13px; color:#FFB3AB; font-weight:600; }
 .login-foot { margin:12px 0 0; font-size:12px; color:rgba(255,255,255,.55); }
-/* White theme */
 #login-gate.light { background:linear-gradient(-45deg,#FFFFFF,#EAF3FD,#DDEBFA,#F6FAFF); background-size:400% 400%; }
 #login-gate.light .blob { opacity:.22; }
 #login-gate.light .login-card { background:rgba(255,255,255,.88); border-color:#E6E5E3; color:#2C2C2B; box-shadow:0 24px 70px rgba(30,80,140,.16); }
@@ -245,7 +248,6 @@ li.st-active .st-ic { background:var(--blue); color:#fff; animation:spinIc 1.4s 
 #login-gate.light #theme-toggle { background:#fff; border-color:#E6E5E3; color:#2C2C2B; }
 
 /* ================= RESPONSIVE ================= */
-/* Tablet */
 @media (max-width:760px) {
   .wrap { padding:12px; }
   .card { padding:18px 14px; }
@@ -259,7 +261,6 @@ li.st-active .st-ic { background:var(--blue); color:#fff; animation:spinIc 1.4s 
   .seg-control button { flex:1 1 auto; padding:10px 8px; font-size:13px; }
   .card h2 { font-size:19px; }
 }
-/* Phone */
 @media (max-width:480px) {
   .card { padding:14px 12px; border-radius:10px; }
   .card h2 { font-size:17px; }
@@ -272,5 +273,4 @@ li.st-active .st-ic { background:var(--blue); color:#fff; animation:spinIc 1.4s 
   .info-grid { grid-template-columns:repeat(2,1fr); }
 }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
-/* Prevent iOS bounce overscroll on fixed gate */
 #login-gate { overscroll-behavior:none; }

@@ -5,24 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=11">
+<link rel="stylesheet" href="styles.css?v=13">
 <style>
-/* Final player: show at its natural aspect ratio, centred, no black bars */
-#final-player {
-  display: block;
-  margin: 0 auto;
-  width: auto;
-  max-width: 100%;
-  max-height: 72vh;
-  border-radius: var(--radius-lg);
-  background: #000;
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow);
-  animation: popIn .45s ease both;
-}
-/* hidden render player */
+#final-player { display:block; margin:0 auto; width:auto; max-width:100%; max-height:72vh; border-radius:var(--radius-lg); background:#000; border:1px solid var(--border); box-shadow:var(--shadow); animation:popIn .45s ease both; }
 #player { display:none; }
-/* stage percentage badge */
 .st-pct { margin-left:auto; font-size:12px; font-weight:700; color:var(--blue); min-width:34px; text-align:right; }
 </style>
 </head>
@@ -119,12 +105,23 @@
 
   <!-- STEP 2 -->
   <section class="card" id="panel-2" hidden>
-    <h2>📝 Add a transcript</h2>
-    <p class="muted">Pick either side — fetch it automatically from YouTube, or paste/upload it yourself.</p>
+    <h2>📝 Get your transcript</h2>
+    <p class="muted">AI Auto-Transcribe listens to your uploaded video and builds an accurate, word-timed script automatically — no YouTube link or manual paste needed.</p>
+
+    <div class="ai-box" id="ai-box">
+      <h3>🎙️ AI Auto-Transcribe <span class="badge">Recommended</span></h3>
+      <p class="muted small">Uses speech-to-text AI to read your uploaded video and time every line precisely — this is what powers the best-line cutting and captions.</p>
+      <button class="btn primary" id="ai-transcribe" type="button">✨ Transcribe my video with AI</button>
+      <p class="muted small" id="ai-status"></p>
+      <button class="btn ghost mini" id="use-ai" type="button" style="display:none;margin-top:8px;width:100%">✓ Use this → Style</button>
+    </div>
+
+    <div class="or-divider">or use one of these instead (optional — not required)</div>
+
     <div class="tr-grid">
       <div class="tr-col">
-        <h3>🎥 From YouTube (built-in)</h3>
-        <p class="muted small">Paste the YouTube link and we'll grab the transcript. If YouTube blocks it, we'll open the transcript page so you can copy-paste it on the Manual side.</p>
+        <h3>🎥 From YouTube</h3>
+        <p class="muted small">Paste the YouTube link and we'll try to grab the transcript. If YouTube blocks it, we'll open the transcript page so you can copy-paste it on the Manual side.</p>
         <input type="text" id="yt-url" placeholder="https://www.youtube.com/watch?v=…">
         <button class="btn" id="yt-fetch" type="button">⚡ Fetch transcript</button>
         <p class="muted small" id="yt-status"></p>
@@ -228,7 +225,6 @@
   <!-- STEP 5 -->
   <section class="card" id="panel-5" hidden>
     <h2>🎬 Your final edit</h2>
-    <!-- hidden scrubbing player used only during render -->
     <video id="player" playsinline preload="auto" style="display:none;position:absolute;opacity:0;pointer-events:none"></video>
 
     <div id="render-box">
@@ -245,7 +241,6 @@
     </div>
 
     <div id="final-box" style="display:none;text-align:center">
-      <!-- no poster, preload=none so no thumbnail frame shows -->
       <video id="final-player" controls playsinline preload="none"></video>
       <p class="final-info" id="final-info" style="text-align:left"></p>
       <div class="actions" style="justify-content:center;flex-wrap:wrap">
@@ -260,7 +255,7 @@
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=11"></script>
-<script src="app-ui.js?v=11"></script>
+<script src="app-core.js?v=13"></script>
+<script src="app-ui.js?v=13"></script>
 </body>
 </html>
