@@ -169,11 +169,29 @@ function boot(){
     if(t.length>10)handleTranscript(null,t);
     if(S.sentences.length&&(manualReady||t.length>10)){goStep(3);return;}
     showAlert("Manual side is empty \u2014 paste a transcript or upload a file first.");});
+  $("#ai-transcribe").addEventListener("click",async()=>{
+    if(!S.videoFile){showAlert("Upload a video first (step 1).");goStep(1);return;}
+    const btn=$("#ai-transcribe"),st=$("#ai-status"),useBtn=$("#use-ai");
+    btn.disabled=true;useBtn.style.display="none";st.textContent="";
+    try{
+      const sents=await transcribeWithDeepgram(S.videoFile,msg=>{st.textContent="\u23f3 "+msg;});
+      if(!sents.length){st.textContent="\u26a0 No speech detected in the audio \u2014 try Manual or YouTube instead.";btn.disabled=false;return;}
+      S.sentences=sents;aiReady=true;
+      const wc=sents.reduce((n,s)=>n+s.text.split(/\s+/).filter(Boolean).length,0);
+      infoGrid("#tr-info",[["Source","AI Speech-to-Text (Deepgram)"],["Words",String(wc)],["Sentences",String(sents.length)],["Cover",fmtTime(sents[0].start)+" \u2013 "+fmtTime(sents[sents.length-1].end)]]);
+      st.textContent="\u2713 Transcribed accurately \u2014 hit Use this!";
+      useBtn.style.display="block";
+    }catch(e){
+      console.warn(e);
+      st.textContent="\u26a0 AI transcription failed ("+(e&&e.message?e.message:"network error")+") \u2014 try Manual or YouTube instead.";
+    }
+    btn.disabled=false;});
+  $("#use-ai").addEventListener("click",()=>{if(S.sentences.length&&aiReady)goStep(3);});
   $("#to-step-2").addEventListener("click",()=>goStep(2));
   $$("[data-back]").forEach(b=>b.addEventListener("click",()=>goStep(Number(b.dataset.back))));
   $("#generate").addEventListener("click",()=>{
     if(!S.videoFile){showAlert("Load a video first (step 1).");goStep(1);return;}
-    if(!S.sentences.length){showAlert("Add a transcript first (step 2).");goStep(2);return;}
+    if(!S.sentences.length){showAlert("Add a transcript first (step 2) \u2014 AI Auto-Transcribe is the fastest way.");goStep(2);return;}
     generate();});
   $("#cancel-export").addEventListener("click",()=>{S.cancelExport=true;});
   $("#render-again").addEventListener("click",()=>{if(!S.exporting)startRender();});
