@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
 
@@ -105,7 +105,11 @@
     <div class="tr-grid">
       <div class="tr-col">
         <h3>🎥 From YouTube (built-in)</h3>
-        <p class="muted small">Paste the YouTube link of this video and we'll grab the transcript for you.</p>
+        <p class="muted small">Choose a source, paste the YouTube link, and we'll grab the transcript.</p>
+        <div class="seg-control" id="yt-source">
+          <button type="button" data-src="1" class="sel">Transcript 1 · API</button>
+          <button type="button" data-src="2">Transcript 2 · Website</button>
+        </div>
         <input type="text" id="yt-url" placeholder="https://www.youtube.com/watch?v=…">
         <button class="btn" id="yt-fetch" type="button">⚡ Fetch transcript</button>
         <p class="muted small" id="yt-status"></p>
@@ -229,7 +233,7 @@
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=7"></script>
-<script src="app-ui.js?v=7"></script>
+<script src="app-core.js?v=8"></script>
+<script src="app-ui.js?v=8"></script>
 </body>
 </html>
