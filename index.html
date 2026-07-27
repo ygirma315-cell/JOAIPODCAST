@@ -5,11 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=14">
+<link rel="stylesheet" href="styles.css?v=15">
 <style>
 #final-player { display:block; margin:0 auto; width:auto; max-width:100%; max-height:72vh; border-radius:var(--radius-lg); background:#000; border:1px solid var(--border); box-shadow:var(--shadow); animation:popIn .45s ease both; }
-#player { display:none; }
+/* Keep source player decodable (NOT display:none) — required for canvas render */
+#player {
+  position:fixed; left:-9999px; top:0;
+  width:320px; height:180px;
+  opacity:0; pointer-events:none; z-index:-1;
+}
 .st-pct { margin-left:auto; font-size:12px; font-weight:700; color:var(--blue); min-width:34px; text-align:right; }
+.manual-box { margin-top:14px; border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px; background:var(--soft); display:flex; flex-direction:column; gap:10px; }
+.manual-box h3 { margin:0; font-size:15px; }
 </style>
 </head>
 <body>
@@ -103,42 +110,33 @@
     </div>
   </section>
 
-  <!-- STEP 2 -->
+  <!-- STEP 2: AI + Manual only -->
   <section class="card" id="panel-2" hidden>
     <h2>📝 Get your transcript</h2>
-    <p class="muted">AI Auto-Transcribe listens to your uploaded video and builds an accurate, word-timed script automatically — no YouTube link or manual paste needed.</p>
+    <p class="muted">Use AI speech-to-text on your uploaded video, or paste / upload a transcript manually.</p>
 
     <div class="ai-box" id="ai-box">
       <h3>🎙️ AI Auto-Transcribe <span class="badge">Recommended</span></h3>
-      <p class="muted small">Uses speech-to-text AI to read your uploaded video and time every line precisely — this is what powers the best-line cutting and captions.</p>
+      <p class="muted small">Listens to your uploaded video and builds a word-timed script automatically — best for accurate cuts &amp; captions.</p>
       <button class="btn primary" id="ai-transcribe" type="button">✨ Transcribe my video with AI</button>
       <p class="muted small" id="ai-status"></p>
       <button class="btn ghost mini" id="use-ai" type="button" style="display:none;margin-top:8px;width:100%">✓ Use this → Style</button>
     </div>
 
-    <div class="or-divider">or use one of these instead (optional — not required)</div>
+    <div class="or-divider">or paste / upload manually</div>
 
-    <div class="tr-grid">
-      <div class="tr-col">
-        <h3>🎥 From YouTube</h3>
-        <p class="muted small">Paste the YouTube link and we'll try to grab the transcript. If YouTube blocks it, we'll open the transcript page so you can copy-paste it on the Manual side.</p>
-        <input type="text" id="yt-url" placeholder="https://www.youtube.com/watch?v=…">
-        <button class="btn" id="yt-fetch" type="button">⚡ Fetch transcript</button>
-        <p class="muted small" id="yt-status"></p>
-        <button class="btn primary use-btn" id="use-yt" type="button">✓ Use this → Style</button>
+    <div class="manual-box" id="manual-box">
+      <h3>📝 Manual transcript</h3>
+      <div class="dropzone small-dz" id="tr-drop" tabindex="0">
+        <div class="dz-title">Drop .srt / .vtt / .txt</div>
+        <div class="dz-sub">or <span class="link">browse</span></div>
       </div>
-      <div class="tr-col">
-        <h3>📝 Manual</h3>
-        <div class="dropzone small-dz" id="tr-drop" tabindex="0">
-          <div class="dz-title">Drop .srt / .vtt / .txt</div>
-          <div class="dz-sub">or <span class="link">browse</span></div>
-        </div>
-        <input type="file" id="tr-input" accept=".srt,.vtt,.txt,text/plain" hidden>
-        <div class="or-divider">or paste it</div>
-        <textarea id="tr-text" rows="5" placeholder="Paste the transcript text (SRT, VTT or plain text)…"></textarea>
-        <button class="btn primary use-btn" id="use-manual" type="button">✓ Use this → Style</button>
-      </div>
+      <input type="file" id="tr-input" accept=".srt,.vtt,.txt,text/plain" hidden>
+      <div class="or-divider">or paste it</div>
+      <textarea id="tr-text" rows="6" placeholder="Paste the transcript text (SRT, VTT or plain text)…"></textarea>
+      <button class="btn primary" id="use-manual" type="button" style="width:100%">✓ Use this → Style</button>
     </div>
+
     <div class="info-grid" id="tr-info" hidden></div>
     <div class="actions">
       <button class="btn ghost" data-back="1">← Back</button>
@@ -148,7 +146,7 @@
   <!-- STEP 3 -->
   <section class="card" id="panel-3" hidden>
     <h2>🎨 Style your edit</h2>
-    <p class="muted small">Pick length, how many short clips, captions and effects — the final video is cut to stay near your target length.</p>
+    <p class="muted small">Pick the final length — AI finds the single best part near that time. Captions &amp; effects optional.</p>
 
     <div class="opt-section">
       <h3>💬 Captions</h3>
@@ -183,14 +181,10 @@
 
     <div class="opt-section">
       <h3>🎬 Editing</h3>
-      <p class="sec-sub">Final video stays near your target length — a few short, punchy clips stitched with jump-cuts (not long lines).</p>
+      <p class="sec-sub">One best clip only. AI picks the strongest part and crops filler so length stays near your target (for 2 min: about 1:45–2:20).</p>
       <div class="opt-group">
-        <label class="opt-label">Final video length (total)</label>
+        <label class="opt-label">Final video length</label>
         <div class="seg-control" id="opt-duration"></div>
-      </div>
-      <div class="opt-group">
-        <label class="opt-label">How many short clips</label>
-        <div class="seg-control" id="opt-count"></div>
       </div>
       <div class="opt-group">
         <label class="opt-label">Frame / aspect ratio</label>
@@ -199,25 +193,25 @@
       <div class="opt-group">
         <label class="opt-label">Motion &amp; extras</label>
         <div class="toggles">
-          <label class="toggle"><input type="checkbox" id="opt-fades" checked> Fade in/out between cuts</label>
+          <label class="toggle"><input type="checkbox" id="opt-fades" checked> Fade in/out</label>
           <label class="toggle"><input type="checkbox" id="opt-zoom" checked> Slow punch-in zoom</label>
           <label class="toggle"><input type="checkbox" id="opt-watermark"> Watermark</label>
         </div>
         <div id="wm-group" style="display:none;margin-top:10px">
-          <input type="text" id="opt-wm-text" placeholder="@yourhandle" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font:inherit">
+          <input type="text" id="opt-wm-text" placeholder="@yourhandle" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font:inherit;font-size:16px">
         </div>
       </div>
     </div>
 
     <div class="actions">
       <button class="btn ghost" data-back="2">← Back</button>
-      <button class="btn primary" id="generate">✨ Find moments &amp; render</button>
+      <button class="btn primary" id="generate">✨ Find best part &amp; render</button>
     </div>
   </section>
 
   <!-- STEP 4 -->
   <section class="card" id="panel-4" hidden>
-    <h2 id="progress-title">Finding your viral moments…</h2>
+    <h2 id="progress-title">Finding your best moment…</h2>
     <div class="bar big"><div class="bar-fill" id="job-bar"></div></div>
     <ul class="stages" id="stages"></ul>
   </section>
@@ -225,7 +219,7 @@
   <!-- STEP 5 -->
   <section class="card" id="panel-5" hidden>
     <h2>🎬 Your final edit</h2>
-    <video id="player" playsinline preload="auto" style="display:none;position:absolute;opacity:0;pointer-events:none"></video>
+    <video id="player" playsinline preload="auto" muted crossorigin="anonymous"></video>
 
     <div id="render-box">
       <p class="muted" id="render-info"></p>
@@ -234,17 +228,17 @@
         <span id="export-pct" style="font-weight:700;font-size:17px;min-width:46px;text-align:right;color:var(--blue)">0%</span>
       </div>
       <p class="small" id="export-log" style="margin-top:8px"></p>
-      <p class="muted small">The video renders in real time — keep this tab open and visible 👀 (muted while rendering, audio is captured into the output).</p>
+      <p class="muted small">Renders in real time — keep this tab open and visible 👀 (muted while rendering; audio is still recorded into the file).</p>
       <div class="actions">
         <button class="btn danger mini" id="cancel-export">Cancel</button>
       </div>
     </div>
 
     <div id="final-box" style="display:none;text-align:center">
-      <video id="final-player" controls playsinline preload="none"></video>
+      <video id="final-player" controls playsinline preload="auto"></video>
       <p class="final-info" id="final-info" style="text-align:left"></p>
       <div class="actions" style="justify-content:center;flex-wrap:wrap">
-        <a class="btn primary" id="download">⬇ Download video</a>
+        <a class="btn primary" id="download" download>⬇ Download video</a>
         <button class="btn" id="render-again">↻ Re-render</button>
         <button class="btn ghost" data-back="3">← Back to style</button>
         <button class="btn ghost" id="start-over">Start over</button>
@@ -255,7 +249,7 @@
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=14"></script>
-<script src="app-ui.js?v=14"></script>
+<script src="app-core.js?v=15"></script>
+<script src="app-ui.js?v=15"></script>
 </body>
 </html>
