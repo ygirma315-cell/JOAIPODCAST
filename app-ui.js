@@ -1,34 +1,46 @@
 "use strict";
 
 /* ================= STEP 4: ANALYZE ================= */
-const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Finding good regions"],["score","Scoring 18 virality signals"],["select","Picking distinct moments"],["refine","Cutting out the best lines"]];
+const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Finding punchy short clips"],["score","Scoring 18 virality signals"],["select","Picking 2–3 best moments"],["refine","Cutting filler to hit target length"]];
 const STAGE_PCT={probe:12,audio:38,cands:56,score:74,select:88,refine:100};
 function initStages(){const ul=$("#stages");ul.innerHTML="";for(const[id,label]of STAGES){const li=document.createElement("li");li.id="st-"+id;li.innerHTML='<span class="st-ic">\u25cb</span><span class="st-label"></span><span class="st-pct"></span>';li.querySelector(".st-label").textContent=label;ul.appendChild(li);}}
 function setStage(id,state){const li=$("#st-"+id);if(!li)return;li.classList.remove("st-active","st-done");if(state==="active"){li.classList.add("st-active");li.querySelector(".st-pct").textContent="";}
   if(state==="done"){li.classList.add("st-done");li.querySelector(".st-ic").textContent="\u2713";li.querySelector(".st-pct").textContent=STAGE_PCT[id]+"%";}}
 async function generate(){goStep(4);initStages();const bar=$("#job-bar");const title=$("#progress-title");
   function setBar(pct,label){bar.style.width=pct+"%";title.textContent=label+" \u2014 "+pct+"% complete";}
+  /* target_s = TOTAL final video length; each clip gets a share of that budget */
+  const totalTarget=S.opts.target_s||120;
+  const clipCount=S.opts.count||3;
+  const idealClip=typeof perClipTarget==="function"?perClipTarget(totalTarget,clipCount):Math.max(12,Math.min(70,totalTarget/Math.max(clipCount,1)));
   setBar(4,"Starting\u2026");
   setStage("probe","active");await sleep(250);setStage("probe","done");setBar(12,"Probing video");
   setStage("audio","active");setBar(14,"Analyzing audio");
   if(!S.audioEnergy&&S.videoFile)S.audioEnergy=await analyzeAudio(S.videoFile);
   if(S.audioEnergy&&S.audioEnergy.length){const m=S.audioEnergy.reduce((a,b)=>a+b,0)/S.audioEnergy.length;const varr=S.audioEnergy.reduce((a,b)=>a+(b-m)*(b-m),0)/S.audioEnergy.length;S.audioStats={mean:m,std:Math.sqrt(varr)||0.001};}
   setStage("audio","done");setBar(38,"Audio done");
-  setStage("cands","active");setBar(40,"Scanning the transcript for good regions");await sleep(120);
-  const corpus=buildCorpus(S.sentences);const cands=buildCandidates(S.sentences,S.opts.target_s);
+  setStage("cands","active");setBar(40,"Scanning for ~"+Math.round(idealClip)+"s punchy clips");await sleep(120);
+  const corpus=buildCorpus(S.sentences);const cands=buildCandidates(S.sentences,idealClip);
   setStage("cands","done");setBar(56,"Regions ready");
   setStage("score","active");setBar(58,"Scoring moments");await sleep(120);
-  const scored=scoreAll(cands,corpus,S.videoDuration||(S.sentences.length?S.sentences[S.sentences.length-1].end:600),S.audioEnergy,S.opts.target_s,S.audioStats);
+  const scored=scoreAll(cands,corpus,S.videoDuration||(S.sentences.length?S.sentences[S.sentences.length-1].end:600),S.audioEnergy,idealClip,S.audioStats);
   setStage("score","done");setBar(74,"Scored all moments");
-  setStage("select","active");setBar(76,"Selecting best moments");await sleep(120);
-  const picked=selectTop(scored,S.opts.count);
+  setStage("select","active");setBar(76,"Selecting best "+clipCount+" clip"+(clipCount===1?"":"s"));await sleep(120);
+  const picked=selectTop(scored,clipCount);
   setStage("select","done");setBar(88,"Moments selected");
-  setStage("refine","active");setBar(90,"Reading each line \u2014 keeping only the good parts");
+  setStage("refine","active");setBar(90,"Cutting filler so final video \u2248 "+fmtTime(totalTarget));
   const sentScore=computeSentenceScores(S.sentences,corpus,S.audioEnergy,S.audioStats);
-  buildMomentCuts(picked,S.sentences,sentScore,S.opts.target_s);
+  buildMomentCuts(picked,S.sentences,sentScore,totalTarget);
   setStage("refine","done");setBar(100,"Done! Starting render");
   S.candidates=scored;S.selected=picked.filter(p=>p.cuts&&p.cuts.length);
   if(!S.selected.length){showAlert("No clips found \u2014 the transcript may be too short. Try a shorter target duration.");goStep(3);return;}
+  const planned=S.selected.reduce((n,m)=>n+(m.cutDuration||0),0);
+  if(planned>totalTarget*1.35){
+    /* safety: if still long, keep only the top-scoring moments until under budget */
+    const ranked=[...S.selected].sort((a,b)=>(b._avgScore||b.score||0)-(a._avgScore||a.score||0));
+    const keep=[];let acc=0;
+    for(const m of ranked){if(keep.length>=2&&acc+m.cutDuration>totalTarget*1.1)continue;keep.push(m);acc+=m.cutDuration;if(acc>=totalTarget*0.85&&keep.length>=2)break;}
+    S.selected=keep.sort((a,b)=>a.start-b.start);
+  }
   await sleep(400);startRender();}
 
 /* ================= STEP 5: RENDER + FINAL VIDEO ================= */
@@ -40,7 +52,8 @@ async function startRender(){goStep(5);
   const moments=S.selected;
   const totalCuts=moments.reduce((n,m)=>n+(m.cuts?m.cuts.length:0),0);
   const tot=moments.reduce((n,m)=>n+(m.cutDuration||0),0);
-  $("#render-info").textContent=moments.length+" best moment"+(moments.length===1?"":"s")+" \u00b7 "+totalCuts+" line"+(totalCuts===1?"":"s")+" stitched together (filler cut out) \u00b7 final video \u2248 "+fmtTime(tot);
+  const target=S.opts.target_s||120;
+  $("#render-info").textContent=moments.length+" short clip"+(moments.length===1?"":"s")+" \u00b7 "+totalCuts+" jump-cut"+(totalCuts===1?"":"s")+" \u00b7 final \u2248 "+fmtTime(tot)+" (target "+fmtTime(target)+")";
   exportClips();}
 
 /* ================= CAPTION TEMPLATES ================= */
@@ -112,7 +125,7 @@ async function exportClips(){if(S.exporting)return;
     for(let ci=0;ci<cuts.length&&!S.cancelExport;ci++){
       const cut=cuts[ci];cutIndex++;
       const isFirstCutInMoment=ci===0,isLastCutInMoment=ci===cuts.length-1;
-      $("#export-log").textContent="\ud83c\udfac Line "+cutIndex+" of "+totalCutsAll+" \u00b7 moment "+(mi+1)+"/"+moments.length+" \u00b7 "+fmtTime(rendered)+" / "+fmtTime(total)+" rendered";
+      $("#export-log").textContent="\ud83c\udfac Cut "+cutIndex+"/"+totalCutsAll+" \u00b7 clip "+(mi+1)+"/"+moments.length+" \u00b7 "+fmtTime(rendered)+" / "+fmtTime(total);
       p.currentTime=cut.cs;
       await new Promise(res=>{const on=()=>{p.removeEventListener("seeked",on);res();};p.addEventListener("seeked",on);});
       try{await p.play();}catch(e){}
@@ -121,7 +134,6 @@ async function exportClips(){if(S.exporting)return;
         let cr=cropRect(vw,vh,cw,ch);
         const cutT=p.currentTime-cut.cs,cutDur=Math.max(cut.ce-cut.cs,0.1);
         if(opt.zoom){const zp=Math.min(Math.max(cutT/cutDur,0),1);const z=1+0.06*zp;const sw2=cr.sw/z,sh2=cr.sh/z;cr={sx:cr.sx+(cr.sw-sw2)/2,sy:cr.sy+(cr.sh-sh2)/2,sw:sw2,sh:sh2};}
-        /* quick punch-in on every jump cut (except the very first cut of the whole edit) for a snappy, professional feel */
         if(cutT<CUTPOP&&!(mi===0&&ci===0)){const pz=1+0.05*(1-cutT/CUTPOP);const sw3=cr.sw/pz,sh3=cr.sh/pz;cr={sx:cr.sx+(cr.sw-sw3)/2,sy:cr.sy+(cr.sh-sh3)/2,sw:sw3,sh:sh3};}
         ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);
         if(p.videoWidth)ctx.drawImage(p,cr.sx,cr.sy,cr.sw,cr.sh,0,0,cw,ch);
@@ -147,7 +159,8 @@ async function exportClips(){if(S.exporting)return;
   const blob=new Blob(chunks,{type:"video/webm"});const blobUrl=URL.createObjectURL(blob);
   const fp=$("#final-player");fp.src=blobUrl;
   const dl=$("#download");dl.href=blobUrl;dl.download="podcast_clip_"+Date.now()+".webm";
-  $("#final-info").innerHTML="\u2705 Render complete! <strong>"+moments.length+" moment"+(moments.length===1?"":"s")+"</strong> \u00b7 <strong>"+totalCutsAll+" line"+(totalCutsAll===1?"":"s")+" stitched"+(totalCutsAll>moments.length?" (filler cut out)":"")+"</strong> \u00b7 Total length: <strong>"+fmtTime(total)+"</strong> \u00b7 "+fmtBytes(blob.size)+" \u00b7 WebM (use CloudConvert for MP4)";
+  const tgt=opt.target_s||120;
+  $("#final-info").innerHTML="\u2705 Render complete! <strong>"+moments.length+" short clip"+(moments.length===1?"":"s")+"</strong> \u00b7 <strong>"+totalCutsAll+" jump-cut"+(totalCutsAll===1?"":"s")+"</strong> \u00b7 Total length: <strong>"+fmtTime(total)+"</strong> (target "+fmtTime(tgt)+") \u00b7 "+fmtBytes(blob.size)+" \u00b7 WebM";
   $("#render-box").style.display="none";$("#final-box").style.display="block";
   try{fp.play();}catch(e){}}
 
