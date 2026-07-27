@@ -1,7 +1,7 @@
 "use strict";
 
 /* ================= STEP 4: ANALYZE ================= */
-const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Building candidate moments"],["score","Scoring 18 virality signals"],["select","Picking the best distinct clips"],["refine","Refining clip boundaries"]];
+const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Building candidate moments"],["score","Scoring 18 virality signals"],["select","Picking the best distinct moments"],["refine","Refining cut boundaries"]];
 function initStages(){const ul=$("#stages");ul.innerHTML="";for(const[id,label]of STAGES){const li=document.createElement("li");li.id="st-"+id;li.innerHTML='<span class="st-ic">\u25cb</span><span></span>';li.querySelector("span:last-child").textContent=label;ul.appendChild(li);}}
 function setStage(id,state){const li=$("#st-"+id);if(!li)return;li.classList.remove("st-active","st-done");if(state==="active")li.classList.add("st-active");if(state==="done"){li.classList.add("st-done");li.querySelector(".st-ic").textContent="\u2713";}}
 async function generate(){goStep(4);initStages();const bar=$("#job-bar");bar.style.width="4%";$("#progress-title").textContent="Finding your viral moments\u2026";
@@ -28,24 +28,48 @@ async function startRender(){goStep(5);
   $("#render-info").textContent=segs.length+" best moments picked \u00b7 final video \u2248 "+fmtTime(tot);
   exportClips();}
 
-/* ================= CAPTIONS (burned into render) ================= */
+/* ================= CAPTION TEMPLATES ================= */
 const CAP_MAX_WORDS=6;
+function capStyle(opt){
+  switch(opt.capTemplate){
+    case "clean":return{upper:false,mono:false,text:"#FFFFFF",hl:opt.colorHl==="#FFFFFF"?"#FFD84D":opt.colorHl,glow:"rgba(0,0,0,.9)",box:false};
+    case "mono":return{upper:false,mono:true,text:"#E8E8E8",hl:"#7CF5B8",glow:"rgba(0,0,0,.9)",box:false};
+    case "neon":return{upper:true,mono:false,text:"#7DF9FF",hl:"#FF3CAC",glow:"rgba(0,229,255,.85)",box:false};
+    case "boxed":return{upper:true,mono:false,text:"#FFFFFF",hl:"#FFE400",glow:null,box:true};
+    default:return{upper:true,mono:false,text:opt.colorText||"#FFFF00",hl:opt.colorHl||"#FFFFFF",glow:"rgba(0,0,0,.9)",box:false};
+  }}
 function wordSpans(sent){if(sent._words)return sent._words;const words=sent.text.split(/\s+/).filter(Boolean);const dur=Math.max(sent.end-sent.start,0.3);const per=dur/words.length;sent._words=words.map((w,i)=>({w,t0:sent.start+i*per,t1:sent.start+(i+1)*per}));return sent._words;}
 function capChunk(sent,t){const ws=wordSpans(sent);let idx=ws.findIndex(x=>t>=x.t0&&t<x.t1);if(idx<0)idx=t>=sent.end?ws.length-1:0;const c0=Math.floor(idx/CAP_MAX_WORDS)*CAP_MAX_WORDS;return{words:ws.slice(c0,c0+CAP_MAX_WORDS),active:idx-c0};}
 function cropRect(vw,vh,cw,ch){const sc=Math.max(cw/vw,ch/vh);const sw=cw/sc,sh=ch/sc;return{sx:(vw-sw)/2,sy:(vh-sh)/2,sw,sh};}
 function layoutWords(ctx,words,maxW){const lines=[];let line=[];for(const w of words){const test=line.concat([w]).map(x=>x.w).join(" ");if(ctx.measureText(test).width>maxW&&line.length){lines.push(line);line=[w];}else line.push(w);}if(line.length)lines.push(line);return lines.slice(0,2);}
-function drawCaption(ctx,cw,ch,t,opt){if(!opt.captions)return;const sent=S.sentences.find(s=>t>=s.start&&t<=s.end);if(!sent)return;const{words,active}=capChunk(sent,t);
-  const fs=Math.round(cw*0.055);ctx.font="900 "+fs+"px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif";if(opt.style==="mono")ctx.font="900 "+Math.round(fs*0.9)+"px Menlo,Consolas,monospace";
+function drawCaption(ctx,cw,ch,t,opt){
+  if(!opt.captions||opt.capTemplate==="none")return;
+  const sent=S.sentences.find(s=>t>=s.start&&t<=s.end);if(!sent)return;
+  const{words,active}=capChunk(sent,t);
+  const st=capStyle(opt);
+  const sizeMap={s:0.042,m:0.055,l:0.07};
+  const fs=Math.round(cw*(sizeMap[opt.capSize]||0.055));
+  ctx.font="900 "+(st.mono?Math.round(fs*0.9)+"px Menlo,Consolas,monospace":fs+"px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif");
   ctx.textAlign="center";ctx.textBaseline="middle";
-  const lines=layoutWords(ctx,words,cw*0.86);const lh=fs*1.3;const baseY=ch*0.86-(lines.length-1)*lh;
+  const lines=layoutWords(ctx,words,cw*0.86);const lh=fs*1.35;
+  const posMap={bottom:0.86,middle:0.55,top:0.16};
+  const anchor=ch*(posMap[opt.capPos]||0.86);
+  const baseY=anchor-(lines.length-1)*lh;
   let wi=0;
-  lines.forEach((line,li)=>{const texts=line.map(x=>opt.style==="bold"?x.w.toUpperCase():x.w);const widths=texts.map(s=>ctx.measureText(s).width);const gap=fs*0.32;const totW=widths.reduce((a,b)=>a+b,0)+gap*(texts.length-1);
+  lines.forEach((line,li)=>{
+    const texts=line.map(x=>st.upper?x.w.toUpperCase():x.w);
+    const widths=texts.map(s2=>ctx.measureText(s2).width);
+    const gap=fs*0.32;
+    const totW=widths.reduce((a,b)=>a+b,0)+gap*(texts.length-1);
     let x=cw/2-totW/2;const y=baseY+li*lh;
-    texts.forEach((s,i)=>{const isOn=wi===active;ctx.save();ctx.shadowColor="rgba(0,0,0,.9)";ctx.shadowBlur=fs*0.35;ctx.lineWidth=Math.max(fs*0.12,3);ctx.strokeStyle="rgba(0,0,0,.85)";
+    if(st.box){ctx.save();ctx.fillStyle="rgba(0,0,0,.78)";ctx.fillRect(cw/2-totW/2-fs*0.45,y-lh*0.52,totW+fs*0.9,lh*1.04);ctx.restore();}
+    texts.forEach((s2,i)=>{const isOn=wi===active;ctx.save();
+      if(st.glow){ctx.shadowColor=st.glow;ctx.shadowBlur=fs*0.35;ctx.lineWidth=Math.max(fs*0.12,3);ctx.strokeStyle="rgba(0,0,0,.85)";}
       const cx=x+widths[i]/2;
-      if(isOn){ctx.translate(cx,y);ctx.scale(1.1,1.1);ctx.translate(-cx,-y);}
-      ctx.strokeText(s,cx,y);ctx.fillStyle=isOn?opt.colorHl:(opt.style==="clean"?"#FFFFFF":opt.colorText);ctx.fillText(s,cx,y);ctx.restore();
-      x+=widths[i]+gap;wi++;});});}
+      if(isOn){ctx.translate(cx,y);ctx.scale(1.12,1.12);ctx.translate(-cx,-y);}
+      if(st.glow)ctx.strokeText(s2,cx,y);
+      ctx.fillStyle=isOn?st.hl:st.text;ctx.fillText(s2,cx,y);
+      ctx.restore();x+=widths[i]+gap;wi++;});});}
 function drawWM(ctx,cw,ch,text){if(!text)return;ctx.save();const fs=Math.round(cw*0.03);ctx.font="700 "+fs+"px -apple-system,sans-serif";ctx.textAlign="right";ctx.textBaseline="top";ctx.shadowColor="rgba(0,0,0,.7)";ctx.shadowBlur=6;ctx.fillStyle="rgba(255,255,255,.82)";ctx.fillText(text,cw-fs,fs);ctx.restore();}
 
 /* ================= RENDER ENGINE ================= */
@@ -57,6 +81,7 @@ async function exportClips(){if(S.exporting)return;
   const p=$("#player");p.muted=false;
   let cw=1080,ch=1920;if(opt.aspect==="1:1"){cw=1080;ch=1080;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d");
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
   const stream=canvas.captureStream(30);
   try{const ps=p.captureStream?p.captureStream():p.mozCaptureStream?p.mozCaptureStream():null;if(ps)ps.getAudioTracks().forEach(t=>stream.addTrack(t));}catch(e){console.warn("No audio track:",e);}
   let mime="video/webm;codecs=vp9,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
@@ -66,12 +91,14 @@ async function exportClips(){if(S.exporting)return;
   rec.start(250);
   const total=segs.reduce((n,s)=>n+(s.ce-s.cs),0)||1;let rendered=0;const F=0.4;
   for(let i=0;i<segs.length&&!S.cancelExport;i++){const seg=segs[i];
-    $("#export-log").textContent="\ud83c\udfac Rendering clip "+(i+1)+" of "+segs.length+"\u2026";
+    $("#export-log").textContent="\ud83c\udfac Rendering moment "+(i+1)+" of "+segs.length+"\u2026";
     p.currentTime=seg.cs;
     await new Promise(res=>{const on=()=>{p.removeEventListener("seeked",on);res();};p.addEventListener("seeked",on);});
     try{await p.play();}catch(e){}
     await new Promise(resolve=>{function frame(){if(S.cancelExport){resolve();return;}
-      const vw=p.videoWidth||cw,vh=p.videoHeight||ch;const cr=cropRect(vw,vh,cw,ch);
+      const vw=p.videoWidth||cw,vh=p.videoHeight||ch;
+      let cr=cropRect(vw,vh,cw,ch);
+      if(opt.zoom){const zp=Math.min(Math.max((p.currentTime-seg.cs)/Math.max(seg.ce-seg.cs,0.1),0),1);const z=1+0.08*zp;const sw2=cr.sw/z,sh2=cr.sh/z;cr={sx:cr.sx+(cr.sw-sw2)/2,sy:cr.sy+(cr.sh-sh2)/2,sw:sw2,sh:sh2};}
       ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);
       if(p.videoWidth)ctx.drawImage(p,cr.sx,cr.sy,cr.sw,cr.sh,0,0,cw,ch);
       drawCaption(ctx,cw,ch,p.currentTime,opt);
@@ -98,13 +125,6 @@ function boot(){
   bindDrop("#video-drop","#video-input",handleVideo);
   bindDrop("#tr-drop","#tr-input",f=>{const rd=new FileReader();rd.onload=()=>handleTranscript(f.name,String(rd.result||""));rd.readAsText(f);});
   let deb;$("#tr-text").addEventListener("input",()=>{clearTimeout(deb);deb=setTimeout(()=>{const t=$("#tr-text").value.trim();if(t.length>10)handleTranscript(null,t);},700);});
-  /* Transcript source selector: Transcript 1 (API) / Transcript 2 (website) */
-  $$("#yt-source button").forEach(b=>b.addEventListener("click",()=>{
-    ytSource=Number(b.dataset.src)||1;
-    $$("#yt-source button").forEach(x=>x.classList.remove("sel"));
-    b.classList.add("sel");
-    ytReady=false;
-    $("#yt-status").textContent="Source set to Transcript "+ytSource+" \u2014 press \u26a1 Fetch transcript.";}));
   $("#yt-fetch").addEventListener("click",()=>{fetchYouTube();});
   $("#yt-url").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();fetchYouTube();}});
   $("#use-yt").addEventListener("click",async()=>{
@@ -129,8 +149,8 @@ function boot(){
   $("#colors-reset").addEventListener("click",()=>{$("#opt-color-text").value="#FFFF00";$("#opt-color-hl").value="#FFFFFF";S.opts.colorText="#FFFF00";S.opts.colorHl="#FFFFFF";});
   $("#opt-color-text").addEventListener("input",e=>S.opts.colorText=e.target.value);
   $("#opt-color-hl").addEventListener("input",e=>S.opts.colorHl=e.target.value);
-  $("#opt-captions").addEventListener("change",e=>S.opts.captions=e.target.checked);
   $("#opt-fades").addEventListener("change",e=>S.opts.fades=e.target.checked);
+  $("#opt-zoom").addEventListener("change",e=>S.opts.zoom=e.target.checked);
   $("#opt-watermark").addEventListener("change",e=>{S.opts.watermark=e.target.checked;$("#wm-group").style.display=e.target.checked?"block":"none";});
   $("#opt-wm-text").addEventListener("input",e=>S.opts.wmText=e.target.value);
 }
