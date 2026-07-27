@@ -11,7 +11,7 @@ const WEIGHTS={audio_energy_mean:1.0,audio_energy_peak:1.2,audio_burst:1.5,audio
 
 /* ================= STATE ================= */
 const S={videoFile:null,videoURL:null,videoDuration:0,sentences:[],candidates:[],selected:[],dropped:new Set(),added:new Set(),audioEnergy:null,audioStats:null,opts:{target_s:60,count:5,aspect:"9:16",capTemplate:"bold",capPos:"bottom",capSize:"m",captions:true,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},exporting:false,cancelExport:false};
-let ytReady=false,manualReady=false,ytSource=1;
+let ytReady=false,manualReady=false;
 
 /* ================= HELPERS ================= */
 const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
@@ -62,30 +62,8 @@ function parseSRT(t){const out=[];for(const blk of t.trim().split(/\n\n+/)){cons
 function alignTXT(text,dur){const sents=(text.match(/[^.!?]+[.!?]+/g)||[text]).map(s=>s.trim()).filter(Boolean);const words=text.split(/\s+/).filter(Boolean).length;const wps=Math.max(words/Math.max(dur,1),0.5);const out=[];let t=0;for(const s of sents){const w=s.split(/\s+/).filter(Boolean).length;const d=Math.max(w/wps,0.5);out.push({start:t,end:Math.min(t+d,dur),text:s});t+=d;}return out;}
 function handleTranscript(fname,text){showAlert("");const t=text.trim();if(t.length<10){showAlert("Transcript is too short.");return;}let sents=[];if(/-->/.test(t)){sents=t.startsWith("WEBVTT")?parseSRT(t.replace(/^WEBVTT[^\n]*\n/,"\n")):parseSRT(t);}else sents=alignTXT(t,S.videoDuration||3600);if(!sents.length){showAlert("Could not parse transcript. Check the format.");return;}S.sentences=sents;manualReady=true;const wc=sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);const timed=/-->/.test(t);infoGrid("#tr-info",[["Format",timed?"SRT/VTT (timed)":"TXT (estimated)"],["Words",String(wc)],["Sentences",String(sents.length)],["Cover",fmtTime(sents[0].start)+" \u2013 "+fmtTime(sents[sents.length-1].end)]]);}
 
-/* ---- YouTube transcript integration ----
-   Transcript 1: youtube-transcript-api (github.com/jaypaun007/youtube-transcript-api) + API key
-   Transcript 2: youtubetotranscript.com scrape via CORS proxies
-   The user picks the source with the #yt-source toggle. */
-const YT_API="https://youtube-transcript-api-tau-one.vercel.app/transcript";
-const YT_API_KEY="6a678de49b9cd661ab183947";
+/* ---- YouTube transcript fetch (best effort; falls back to copy-paste) ---- */
 function ytId(input){const s=(input||"").trim();const m=s.match(/[?&]v=([\w-]{11})/)||s.match(/youtu\.be\/([\w-]{11})/)||s.match(/shorts\/([\w-]{11})/)||s.match(/embed\/([\w-]{11})/)||s.match(/transcript\?v=([\w-]{11})/);if(m)return m[1];if(/^[\w-]{11}$/.test(s))return s;return null;}
-async function fetchViaTranscriptApi(videoUrl){
-  const attempts=[
-    {url:YT_API,headers:{"Content-Type":"application/json"}},
-    {url:YT_API+"?api_key="+YT_API_KEY,headers:{"Content-Type":"application/json","X-API-Key":YT_API_KEY}},
-    {url:"https://corsproxy.io/?url="+encodeURIComponent(YT_API),headers:{"Content-Type":"application/json"}}
-  ];
-  for(const a of attempts){
-    try{
-      const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),30000);
-      const res=await fetch(a.url,{method:"POST",headers:a.headers,body:JSON.stringify({video_url:videoUrl,api_key:YT_API_KEY}),signal:ctl.signal});
-      clearTimeout(to);
-      if(res.status===429)return{err:"rate"};
-      if(res.status===404)return{err:"none"};
-      if(res.ok){const j=await res.json();if(j&&j.transcript&&String(j.transcript).trim().length>50)return{text:String(j.transcript).trim()};}
-    }catch(e){}
-  }
-  return null;}
 async function fetchViaProxies(target){const proxies=[u=>"https://api.allorigins.win/raw?url="+encodeURIComponent(u),u=>"https://corsproxy.io/?url="+encodeURIComponent(u)];
   for(const p of proxies){try{const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),20000);const res=await fetch(p(target),{signal:ctl.signal});clearTimeout(to);if(res.ok){const txt=await res.text();if(txt&&txt.length>500)return txt;}}catch(e){}}
   return null;}
@@ -100,34 +78,21 @@ function parseTranscriptHTML(html){const doc=new DOMParser().parseFromString(htm
 async function fetchYouTube(){const inp=$("#yt-url").value,st=$("#yt-status"),btn=$("#yt-fetch");
   const id=ytId(inp);
   if(!id){st.textContent="\u26a0 That doesn't look like a YouTube link. Paste the full video URL.";return false;}
-  const videoUrl="https://www.youtube.com/watch?v="+id;
   btn.disabled=true;
-  if(ytSource===1){
-    st.textContent="\u23f3 Transcript 1 \u2014 fetching from the API\u2026";
-    let r=null;
-    try{r=await fetchViaTranscriptApi(videoUrl);}catch(e){}
-    btn.disabled=false;
-    if(r&&r.text){handleTranscript(null,r.text);
-      if(S.sentences.length){ytReady=true;st.textContent="\u2713 Transcript 1 loaded \u2014 hit Use this to continue!";return true;}}
-    if(r&&r.err==="rate"){st.textContent="\u26a0 Transcript 1 is rate-limited (5 requests/min). Wait a minute, or switch to Transcript 2.";return false;}
-    if(r&&r.err==="none"){st.textContent="\u26a0 Transcript 1 found no transcript for this video. Try Transcript 2.";return false;}
-    st.textContent="\u26a0 Transcript 1 is unreachable right now \u2014 switch to Transcript 2 and press Fetch again.";
-    return false;
-  }
-  st.textContent="\u23f3 Transcript 2 \u2014 fetching from the website\u2026";
+  st.textContent="\u23f3 Fetching the transcript\u2026";
   const target="https://youtubetotranscript.com/transcript?v="+id;
   let html=null;
   try{html=await fetchViaProxies(target);}catch(e){}
   btn.disabled=false;
-  if(!html){st.innerHTML='Transcript 2 was blocked. <a class="link" href="'+target+'" target="_blank" rel="noopener">I opened the transcript page for you</a> \u2014 press \u201cCopy Transcript\u201d there, then paste it on the Manual side.';window.open(target,"_blank");return false;}
+  if(!html){st.innerHTML='Automatic fetch was blocked. <a class="link" href="'+target+'" target="_blank" rel="noopener">I opened the transcript page for you</a> \u2014 press \u201cCopy Transcript\u201d there, then paste it on the Manual side.';window.open(target,"_blank");return false;}
   const parsed=parseTranscriptHTML(html);
-  if(!parsed){st.innerHTML='Transcript 2 found no transcript \u2014 the video may have captions disabled. <a class="link" href="'+target+'" target="_blank" rel="noopener">Check it here</a>.';return false;}
+  if(!parsed){st.innerHTML='No transcript found \u2014 the video may have captions disabled. <a class="link" href="'+target+'" target="_blank" rel="noopener">Check it here</a>.';return false;}
   if(parsed.sents){S.sentences=parsed.sents;ytReady=true;
     const wc=parsed.sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);
-    infoGrid("#tr-info",[["Source","Transcript 2 (timed)"],["Words",String(wc)],["Sentences",String(parsed.sents.length)],["Cover",fmtTime(parsed.sents[0].start)+" \u2013 "+fmtTime(parsed.sents[parsed.sents.length-1].end)]]);
-    st.textContent="\u2713 Transcript 2 loaded with real timestamps \u2014 hit Use this!";return true;}
+    infoGrid("#tr-info",[["Source","YouTube (timed)"],["Words",String(wc)],["Sentences",String(parsed.sents.length)],["Cover",fmtTime(parsed.sents[0].start)+" \u2013 "+fmtTime(parsed.sents[parsed.sents.length-1].end)]]);
+    st.textContent="\u2713 Transcript loaded with real timestamps \u2014 hit Use this!";return true;}
   handleTranscript(null,parsed.text);
-  if(S.sentences.length){ytReady=true;st.textContent="\u2713 Transcript 2 loaded \u2014 hit Use this!";return true;}
+  if(S.sentences.length){ytReady=true;st.textContent="\u2713 Transcript loaded \u2014 hit Use this!";return true;}
   return false;}
 
 /* ================= STEP 3: OPTIONS ================= */
