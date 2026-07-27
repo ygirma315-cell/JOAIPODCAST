@@ -5,23 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=15">
+<link rel="stylesheet" href="styles.css?v=16">
 <style>
 #final-player { display:block; margin:0 auto; width:auto; max-width:100%; max-height:72vh; border-radius:var(--radius-lg); background:#000; border:1px solid var(--border); box-shadow:var(--shadow); animation:popIn .45s ease both; }
-/* Keep source player decodable (NOT display:none) — required for canvas render */
-#player {
-  position:fixed; left:-9999px; top:0;
-  width:320px; height:180px;
-  opacity:0; pointer-events:none; z-index:-1;
-}
+#player { position:fixed; left:-9999px; top:0; width:320px; height:180px; opacity:0; pointer-events:none; z-index:-1; }
 .st-pct { margin-left:auto; font-size:12px; font-weight:700; color:var(--blue); min-width:34px; text-align:right; }
 .manual-box { margin-top:14px; border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px; background:var(--soft); display:flex; flex-direction:column; gap:10px; }
 .manual-box h3 { margin:0; font-size:15px; }
+.ai-prog { display:none; margin-top:12px; align-items:center; gap:10px; }
+.ai-prog.show { display:flex; }
+.ai-prog .bar { flex:1; height:10px; margin-top:0; }
+#ai-pct { font-weight:800; font-size:14px; color:var(--blue); min-width:42px; text-align:right; }
+#ai-status { min-height:1.3em; }
 </style>
 </head>
 <body>
 
-<!-- ================= LOGIN GATE ================= -->
 <div id="login-gate">
   <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
   <div class="login-card" id="login-card">
@@ -72,7 +71,6 @@
   </div>
 </div>
 
-<!-- ================= APP ================= -->
 <header class="topbar">
   <div class="brand">
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="3" fill="#2783DE"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="#fff"/></svg>
@@ -94,7 +92,6 @@
 
   <div class="alert" id="alert" hidden></div>
 
-  <!-- STEP 1 -->
   <section class="card" id="panel-1">
     <h2>🎥 Upload your video</h2>
     <p class="muted">Drop in the full podcast or long video. It never leaves your computer — everything runs locally.</p>
@@ -110,7 +107,6 @@
     </div>
   </section>
 
-  <!-- STEP 2: AI + Manual only -->
   <section class="card" id="panel-2" hidden>
     <h2>📝 Get your transcript</h2>
     <p class="muted">Use AI speech-to-text on your uploaded video, or paste / upload a transcript manually.</p>
@@ -119,6 +115,10 @@
       <h3>🎙️ AI Auto-Transcribe <span class="badge">Recommended</span></h3>
       <p class="muted small">Listens to your uploaded video and builds a word-timed script automatically — best for accurate cuts &amp; captions.</p>
       <button class="btn primary" id="ai-transcribe" type="button">✨ Transcribe my video with AI</button>
+      <div class="ai-prog" id="ai-prog">
+        <div class="bar"><div class="bar-fill" id="ai-bar" style="width:0%"></div></div>
+        <span id="ai-pct">0%</span>
+      </div>
       <p class="muted small" id="ai-status"></p>
       <button class="btn ghost mini" id="use-ai" type="button" style="display:none;margin-top:8px;width:100%">✓ Use this → Style</button>
     </div>
@@ -143,7 +143,6 @@
     </div>
   </section>
 
-  <!-- STEP 3 -->
   <section class="card" id="panel-3" hidden>
     <h2>🎨 Style your edit</h2>
     <p class="muted small">Pick the final length — AI finds the single best part near that time. Captions &amp; effects optional.</p>
@@ -209,14 +208,12 @@
     </div>
   </section>
 
-  <!-- STEP 4 -->
   <section class="card" id="panel-4" hidden>
     <h2 id="progress-title">Finding your best moment…</h2>
     <div class="bar big"><div class="bar-fill" id="job-bar"></div></div>
     <ul class="stages" id="stages"></ul>
   </section>
 
-  <!-- STEP 5 -->
   <section class="card" id="panel-5" hidden>
     <h2>🎬 Your final edit</h2>
     <video id="player" playsinline preload="auto" muted crossorigin="anonymous"></video>
@@ -249,7 +246,7 @@
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=15"></script>
-<script src="app-ui.js?v=15"></script>
+<script src="app-core.js?v=16"></script>
+<script src="app-ui.js?v=16"></script>
 </body>
 </html>
