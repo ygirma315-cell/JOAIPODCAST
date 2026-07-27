@@ -295,7 +295,7 @@ li.st-active .st-ic { background:var(--blue); color:#fff; animation:spinIc 1.4s 
     <h2>Add the transcript</h2>
     <p class="muted">Grab it straight from YouTube, upload a <code>.srt</code> / <code>.vtt</code> / <code>.txt</code>, or just paste the text.</p>
     <div class="opt-group" style="margin-top:18px">
-      <label class="opt-label">🎥 From YouTube (via youtubetotranscript.com)</label>
+      <label class="opt-label">🎥 From YouTube (auto transcript API)</label>
       <div class="yt-row">
         <input type="text" id="yt-url" placeholder="Paste the YouTube link of this video…">
         <button class="btn primary" id="yt-fetch">Fetch transcript</button>
@@ -465,8 +465,25 @@ function parseSRT(t){const out=[];for(const blk of t.trim().split(/\n\n+/)){cons
 function alignTXT(text,dur){const sents=(text.match(/[^.!?]+[.!?]+/g)||[text]).map(s=>s.trim()).filter(Boolean);const words=text.split(/\s+/).filter(Boolean).length;const wps=Math.max(words/Math.max(dur,1),0.5);const out=[];let t=0;for(const s of sents){const w=s.split(/\s+/).filter(Boolean).length;const d=Math.max(w/wps,0.5);out.push({start:t,end:Math.min(t+d,dur),text:s});t+=d;}return out;}
 function handleTranscript(fname,text){showAlert("");const t=text.trim();if(t.length<10){showAlert("Transcript is too short.");return;}let sents=[];if(/-->/.test(t)){sents=t.startsWith("WEBVTT")?parseSRT(t.replace(/^WEBVTT[^\n]*\n/,"\n")):parseSRT(t);}else sents=alignTXT(t,S.videoDuration||3600);if(!sents.length){showAlert("Could not parse transcript. Check the format.");return;}S.sentences=sents;const wc=sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);const timed=/-->/.test(t);infoGrid("#tr-info",[["Format",timed?"SRT/VTT (timed)":"TXT (estimated)"],["Words",String(wc)],["Sentences",String(sents.length)],["Cover",fmtTime(sents[0].start)+" \u2013 "+fmtTime(sents[sents.length-1].end)]]);$("#to-step-3").disabled=false;}
 
-/* ---- YouTube transcript integration (youtubetotranscript.com) ---- */
+/* ---- YouTube transcript integration ----
+   Primary: youtube-transcript-api (github.com/jaypaun007/youtube-transcript-api)
+   POST https://youtube-transcript-api-tau-one.vercel.app/transcript {video_url}
+   Rate limit: 5 requests/min. Fallback: youtubetotranscript.com scrape. */
+const YT_API="https://youtube-transcript-api-tau-one.vercel.app/transcript";
 function ytId(input){const s=(input||"").trim();const m=s.match(/[?&]v=([\w-]{11})/)||s.match(/youtu\.be\/([\w-]{11})/)||s.match(/shorts\/([\w-]{11})/)||s.match(/embed\/([\w-]{11})/)||s.match(/transcript\?v=([\w-]{11})/);if(m)return m[1];if(/^[\w-]{11}$/.test(s))return s;return null;}
+async function fetchViaTranscriptApi(videoUrl){
+  const targets=[YT_API,"https://corsproxy.io/?url="+encodeURIComponent(YT_API)];
+  for(const t of targets){
+    try{
+      const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),30000);
+      const res=await fetch(t,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({video_url:videoUrl}),signal:ctl.signal});
+      clearTimeout(to);
+      if(res.status===429)return{err:"rate"};
+      if(res.status===404)return{err:"none"};
+      if(res.ok){const j=await res.json();if(j&&j.transcript&&String(j.transcript).trim().length>50)return{text:String(j.transcript).trim()};}
+    }catch(e){}
+  }
+  return null;}
 async function fetchViaProxies(target){const proxies=[u=>"https://api.allorigins.win/raw?url="+encodeURIComponent(u),u=>"https://corsproxy.io/?url="+encodeURIComponent(u)];
   for(const p of proxies){try{const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),20000);const res=await fetch(p(target),{signal:ctl.signal});clearTimeout(to);if(res.ok){const txt=await res.text();if(txt&&txt.length>500)return txt;}}catch(e){}}
   return null;}
@@ -481,8 +498,18 @@ function parseTranscriptHTML(html){const doc=new DOMParser().parseFromString(htm
 async function fetchYouTube(){const inp=$("#yt-url").value,st=$("#yt-status"),btn=$("#yt-fetch");
   const id=ytId(inp);
   if(!id){st.textContent="That doesn't look like a YouTube link. Paste the full video URL.";return;}
+  const videoUrl="https://www.youtube.com/watch?v="+id;
+  btn.disabled=true;
+  /* 1) Primary: youtube-transcript-api */
+  st.textContent="\u23f3 Fetching transcript from the API\u2026";
+  let r=null;
+  try{r=await fetchViaTranscriptApi(videoUrl);}catch(e){}
+  if(r&&r.text){btn.disabled=false;handleTranscript(null,r.text);st.textContent="\u2713 Transcript loaded via youtube-transcript-api (timestamps estimated from speech rate).";return;}
+  if(r&&r.err==="rate"){btn.disabled=false;st.textContent="\u26a0 The transcript API is rate-limited (5 requests/min). Wait a minute and press Fetch again.";return;}
+  if(r&&r.err==="none"){btn.disabled=false;st.textContent="\u26a0 No transcript available for this video \u2014 it may have captions disabled.";return;}
+  /* 2) Fallback: youtubetotranscript.com scrape */
+  st.textContent="\u23f3 API unreachable \u2014 trying backup source\u2026";
   const target="https://youtubetotranscript.com/transcript?v="+id;
-  st.textContent="\u23f3 Fetching transcript for "+id+"\u2026";btn.disabled=true;
   let html=null;
   try{html=await fetchViaProxies(target);}catch(e){}
   btn.disabled=false;
@@ -493,8 +520,8 @@ async function fetchYouTube(){const inp=$("#yt-url").value,st=$("#yt-status"),bt
     const wc=parsed.sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);
     infoGrid("#tr-info",[["Source","YouTube (timed)"],["Words",String(wc)],["Sentences",String(parsed.sents.length)],["Cover",fmtTime(parsed.sents[0].start)+" \u2013 "+fmtTime(parsed.sents[parsed.sents.length-1].end)]]);
     $("#to-step-3").disabled=false;
-    st.textContent="\u2713 Transcript loaded with real timestamps \u2014 you're good to go!";}
-  else{handleTranscript(null,parsed.text);st.textContent="\u2713 Transcript text loaded (timestamps estimated from speech rate).";}}
+    st.textContent="\u2713 Transcript loaded from backup source with real timestamps!";}
+  else{handleTranscript(null,parsed.text);st.textContent="\u2713 Transcript text loaded from backup source (timestamps estimated).";}}
 
 /* ================= STEP 3: OPTIONS ================= */
 function initOpts(){buildSegCtrl("#opt-duration",[30,60,90,120,180],["30 s","1 min","1.5 min","2 min","3 min"],"target_s",60);buildSegCtrl("#opt-count",[3,5,7,10],["3","5","7","10"],"count",5);buildSegCtrl("#opt-aspect",["9:16","1:1","16:9"],["9:16 vertical","1:1 square","16:9 wide"],"aspect","9:16");buildSegCtrl("#opt-style",["bold","clean","mono"],["Bold (yellow)","Clean (white)","Mono"],"style","bold");}
@@ -705,4 +732,27 @@ async function exportClips(){if(S.exporting)return;
   $("#download").hidden=true;$("#cancel-export").hidden=false;$("#render-final").disabled=true;
   const opt=S.opts;let cw=1080,ch=1920;if(opt.aspect==="1:1"){ch=1080;}else if(opt.aspect==="16:9"){cw=1280;ch=720;}
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;
-  canvas.style.cssText="width:150px;max-width:40%;border-radius:8px;border:1px solid #E
+  canvas.style.cssText="width:150px;max-width:40%;border-radius:8px;border:1px solid #E6E5E3;display:block;margin-top:10px;";
+  box.appendChild(canvas);
+  const ctx=canvas.getContext("2d"),stream=canvas.captureStream(30);
+  const player=$("#player");
+  try{const as=player.captureStream?player.captureStream():player.mozCaptureStream?player.mozCaptureStream():null;if(as)as.getAudioTracks().forEach(t=>stream.addTrack(t));}catch(e){}
+  const mime=["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"video/webm";
+  const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:8000000}),chunks=[];
+  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+  rec.onstop=()=>{const blob=new Blob(chunks,{type:"video/webm"}),url=URL.createObjectURL(blob);
+    const dl=$("#download");dl.href=url;dl.download="viralshort_"+Date.now()+".webm";dl.textContent="\u2b07 Download WebM ("+(blob.size/1048576).toFixed(1)+" MB)";dl.hidden=false;
+    $("#cancel-export").hidden=true;$("#render-final").disabled=false;
+    $("#export-log").textContent="Export complete!";$("#export-bar").style.width="100%";
+    S.exporting=false;stream.getTracks().forEach(t=>t.stop());canvas.remove();};
+  rec.start(1000);
+  const total=segs.reduce((s,c)=>s+(c.ce-c.cs),0);let rendered=0;
+  for(const seg of segs){if(S.cancelExport)break;
+    player.currentTime=seg.cs;
+    await new Promise(r=>player.addEventListener("seeked",r,{once:true}));
+    player.muted=false;await player.play().catch(()=>{});
+    await new Promise(resolve=>{function frame(){
+      if(S.cancelExport){resolve();return;}
+      const cr=cropRect(player.videoWidth,player.videoHeight,cw,ch);
+      ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);
+      if(player.videoWidth)ctx.drawImage(player,cr.sx,cr.sy,cr.sw,cr.sh,0,0
