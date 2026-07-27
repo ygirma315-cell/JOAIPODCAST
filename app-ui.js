@@ -2,17 +2,30 @@
 
 /* ================= STEP 4: ANALYZE ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Building candidate moments"],["score","Scoring 18 virality signals"],["select","Picking the best distinct moments"],["refine","Refining cut boundaries"]];
-function initStages(){const ul=$("#stages");ul.innerHTML="";for(const[id,label]of STAGES){const li=document.createElement("li");li.id="st-"+id;li.innerHTML='<span class="st-ic">\u25cb</span><span></span>';li.querySelector("span:last-child").textContent=label;ul.appendChild(li);}}
-function setStage(id,state){const li=$("#st-"+id);if(!li)return;li.classList.remove("st-active","st-done");if(state==="active")li.classList.add("st-active");if(state==="done"){li.classList.add("st-done");li.querySelector(".st-ic").textContent="\u2713";}}
-async function generate(){goStep(4);initStages();const bar=$("#job-bar");bar.style.width="4%";$("#progress-title").textContent="Finding your viral moments\u2026";
-  setStage("probe","active");await sleep(250);setStage("probe","done");bar.style.width="14%";
-  setStage("audio","active");if(!S.audioEnergy&&S.videoFile)S.audioEnergy=await analyzeAudio(S.videoFile);
+const STAGE_PCT={probe:12,audio:38,cands:56,score:74,select:88,refine:100};
+function initStages(){const ul=$("#stages");ul.innerHTML="";for(const[id,label]of STAGES){const li=document.createElement("li");li.id="st-"+id;li.innerHTML='<span class="st-ic">\u25cb</span><span class="st-label"></span><span class="st-pct"></span>';li.querySelector(".st-label").textContent=label;ul.appendChild(li);}}
+function setStage(id,state){const li=$("#st-"+id);if(!li)return;li.classList.remove("st-active","st-done");if(state==="active"){li.classList.add("st-active");li.querySelector(".st-pct").textContent="";}
+  if(state==="done"){li.classList.add("st-done");li.querySelector(".st-ic").textContent="\u2713";li.querySelector(".st-pct").textContent=STAGE_PCT[id]+"%";}}
+async function generate(){goStep(4);initStages();const bar=$("#job-bar");const title=$("#progress-title");
+  function setBar(pct,label){bar.style.width=pct+"%";title.textContent=label+" — "+pct+"% complete";}
+  setBar(4,"Starting\u2026");
+  setStage("probe","active");await sleep(250);setStage("probe","done");setBar(12,"Probing video");
+  setStage("audio","active");setBar(14,"Analyzing audio");
+  if(!S.audioEnergy&&S.videoFile)S.audioEnergy=await analyzeAudio(S.videoFile);
   if(S.audioEnergy&&S.audioEnergy.length){const m=S.audioEnergy.reduce((a,b)=>a+b,0)/S.audioEnergy.length;const varr=S.audioEnergy.reduce((a,b)=>a+(b-m)*(b-m),0)/S.audioEnergy.length;S.audioStats={mean:m,std:Math.sqrt(varr)||0.001};}
-  setStage("audio","done");bar.style.width="38%";
-  setStage("cands","active");await sleep(120);const corpus=buildCorpus(S.sentences);const cands=buildCandidates(S.sentences,S.opts.target_s);setStage("cands","done");bar.style.width="56%";
-  setStage("score","active");await sleep(120);const scored=scoreAll(cands,corpus,S.videoDuration||(S.sentences.length?S.sentences[S.sentences.length-1].end:600),S.audioEnergy,S.opts.target_s,S.audioStats);setStage("score","done");bar.style.width="74%";
-  setStage("select","active");await sleep(120);const picked=selectTop(scored,S.opts.count);setStage("select","done");bar.style.width="88%";
-  setStage("refine","active");picked.forEach(ensureBounds);setStage("refine","done");bar.style.width="100%";
+  setStage("audio","done");setBar(38,"Audio done");
+  setStage("cands","active");setBar(40,"Building candidates");await sleep(120);
+  const corpus=buildCorpus(S.sentences);const cands=buildCandidates(S.sentences,S.opts.target_s);
+  setStage("cands","done");setBar(56,"Candidates ready");
+  setStage("score","active");setBar(58,"Scoring moments");await sleep(120);
+  const scored=scoreAll(cands,corpus,S.videoDuration||(S.sentences.length?S.sentences[S.sentences.length-1].end:600),S.audioEnergy,S.opts.target_s,S.audioStats);
+  setStage("score","done");setBar(74,"Scored all moments");
+  setStage("select","active");setBar(76,"Selecting best moments");await sleep(120);
+  const picked=selectTop(scored,S.opts.count);
+  setStage("select","done");setBar(88,"Moments selected");
+  setStage("refine","active");setBar(90,"Refining boundaries");
+  picked.forEach(ensureBounds);
+  setStage("refine","done");setBar(100,"Done! Starting render");
   S.candidates=scored;S.selected=picked;
   if(!picked.length){showAlert("No clips found \u2014 the transcript may be too short. Try a shorter target duration.");goStep(3);return;}
   await sleep(400);startRender();}
@@ -77,14 +90,13 @@ async function exportClips(){if(S.exporting)return;
   const segs=S.selected.map(ensureBounds).sort((a,b)=>a.cs-b.cs);
   if(!segs.length){showAlert("Nothing to render \u2014 run the analysis first.");goStep(3);return;}
   const opt={...S.opts};S.exporting=true;S.cancelExport=false;
-  $("#export-bar").style.width="0%";$("#export-log").textContent="Preparing renderer\u2026";
-  /* Mute the player during rendering so user doesn't hear it */
+  $("#export-bar").style.width="0%";$("#export-pct").textContent="0%";
+  $("#export-log").textContent="Preparing renderer\u2026";
   const p=$("#player");p.muted=true;p.volume=0;
   let cw=1080,ch=1920;if(opt.aspect==="1:1"){cw=1080;ch=1080;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d");
   ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
   const stream=canvas.captureStream(30);
-  /* Capture audio track from the video (still in the output even though player is muted) */
   try{const ps=p.captureStream?p.captureStream():p.mozCaptureStream?p.mozCaptureStream():null;if(ps)ps.getAudioTracks().forEach(t=>stream.addTrack(t));}catch(e){console.warn("No audio track:",e);}
   let mime="video/webm;codecs=vp9,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
   const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:8_000_000});
@@ -93,7 +105,6 @@ async function exportClips(){if(S.exporting)return;
   rec.start(250);
   const total=segs.reduce((n,s)=>n+(s.ce-s.cs),0)||1;let rendered=0;const F=0.4;
   for(let i=0;i<segs.length&&!S.cancelExport;i++){const seg=segs[i];
-    $("#export-log").textContent="\ud83c\udfac Rendering moment "+(i+1)+" of "+segs.length+" ("+fmtTime(rendered)+" / "+fmtTime(total)+" done)\u2026";
     p.currentTime=seg.cs;
     await new Promise(res=>{const on=()=>{p.removeEventListener("seeked",on);res();};p.addEventListener("seeked",on);});
     try{await p.play();}catch(e){}
@@ -106,25 +117,24 @@ async function exportClips(){if(S.exporting)return;
       drawCaption(ctx,cw,ch,p.currentTime,opt);
       if(opt.watermark)drawWM(ctx,cw,ch,opt.wmText);
       if(opt.fades){const tIn=p.currentTime-seg.cs,tOut=seg.ce-p.currentTime;let a=0;if(tIn<F)a=1-tIn/F;else if(tOut<F)a=1-tOut/F;if(a>0){ctx.fillStyle="rgba(0,0,0,"+Math.min(Math.max(a,0),1).toFixed(3)+")";ctx.fillRect(0,0,cw,ch);}}
-      const prog=(rendered+Math.max(p.currentTime-seg.cs,0))/total*100;$("#export-bar").style.width=Math.min(prog,100)+"%";
+      const rawProg=(rendered+Math.max(p.currentTime-seg.cs,0))/total;
+      const pct=Math.min(Math.round(rawProg*100),99);
+      $("#export-bar").style.width=pct+"%";
+      $("#export-pct").textContent=pct+"%";
+      $("#export-log").textContent="\ud83c\udfac Clip "+(i+1)+" of "+segs.length+" \u00b7 "+fmtTime(rendered+Math.max(p.currentTime-seg.cs,0))+" / "+fmtTime(total)+" rendered";
       if(p.currentTime>=seg.ce||p.ended){resolve();return;}
       requestAnimationFrame(frame);}
       frame();});
     p.pause();rendered+=seg.ce-seg.cs;}
   rec.stop();await done;
-  /* Restore audio for the final player */
   p.muted=false;p.volume=1;
   S.exporting=false;
-  if(S.cancelExport){$("#export-log").textContent="Render cancelled.";$("#export-bar").style.width="0%";goStep(3);return;}
+  if(S.cancelExport){$("#export-log").textContent="Render cancelled.";$("#export-bar").style.width="0%";$("#export-pct").textContent="";goStep(3);return;}
+  $("#export-bar").style.width="100%";$("#export-pct").textContent="100%";
   const blob=new Blob(chunks,{type:"video/webm"});const blobUrl=URL.createObjectURL(blob);
   const fp=$("#final-player");fp.src=blobUrl;
   const dl=$("#download");dl.href=blobUrl;dl.download="podcast_clip_"+Date.now()+".webm";
-  /* Show total clipped / edited duration clearly */
-  $("#final-info").innerHTML=
-    "\u2705 Render complete! " +
-    "<strong>"+segs.length+" moment"+(segs.length===1?"":"s")+" clipped</strong> \u00b7 " +
-    "Total length: <strong>"+fmtTime(total)+"</strong> \u00b7 " +
-    fmtBytes(blob.size)+" \u00b7 WebM (use CloudConvert for MP4)";
+  $("#final-info").innerHTML="\u2705 Render complete! <strong>"+segs.length+" moment"+(segs.length===1?"":"s")+" clipped</strong> \u00b7 Total length: <strong>"+fmtTime(total)+"</strong> \u00b7 "+fmtBytes(blob.size)+" \u00b7 WebM (use CloudConvert for MP4)";
   $("#render-box").style.display="none";$("#final-box").style.display="block";
   try{fp.play();}catch(e){}}
 
