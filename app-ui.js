@@ -78,11 +78,13 @@ async function exportClips(){if(S.exporting)return;
   if(!segs.length){showAlert("Nothing to render \u2014 run the analysis first.");goStep(3);return;}
   const opt={...S.opts};S.exporting=true;S.cancelExport=false;
   $("#export-bar").style.width="0%";$("#export-log").textContent="Preparing renderer\u2026";
-  const p=$("#player");p.muted=false;
+  /* Mute the player during rendering so user doesn't hear it */
+  const p=$("#player");p.muted=true;p.volume=0;
   let cw=1080,ch=1920;if(opt.aspect==="1:1"){cw=1080;ch=1080;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d");
   ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
   const stream=canvas.captureStream(30);
+  /* Capture audio track from the video (still in the output even though player is muted) */
   try{const ps=p.captureStream?p.captureStream():p.mozCaptureStream?p.mozCaptureStream():null;if(ps)ps.getAudioTracks().forEach(t=>stream.addTrack(t));}catch(e){console.warn("No audio track:",e);}
   let mime="video/webm;codecs=vp9,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
   const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:8_000_000});
@@ -91,7 +93,7 @@ async function exportClips(){if(S.exporting)return;
   rec.start(250);
   const total=segs.reduce((n,s)=>n+(s.ce-s.cs),0)||1;let rendered=0;const F=0.4;
   for(let i=0;i<segs.length&&!S.cancelExport;i++){const seg=segs[i];
-    $("#export-log").textContent="\ud83c\udfac Rendering moment "+(i+1)+" of "+segs.length+"\u2026";
+    $("#export-log").textContent="\ud83c\udfac Rendering moment "+(i+1)+" of "+segs.length+" ("+fmtTime(rendered)+" / "+fmtTime(total)+" done)\u2026";
     p.currentTime=seg.cs;
     await new Promise(res=>{const on=()=>{p.removeEventListener("seeked",on);res();};p.addEventListener("seeked",on);});
     try{await p.play();}catch(e){}
@@ -110,12 +112,19 @@ async function exportClips(){if(S.exporting)return;
       frame();});
     p.pause();rendered+=seg.ce-seg.cs;}
   rec.stop();await done;
+  /* Restore audio for the final player */
+  p.muted=false;p.volume=1;
   S.exporting=false;
   if(S.cancelExport){$("#export-log").textContent="Render cancelled.";$("#export-bar").style.width="0%";goStep(3);return;}
-  const blob=new Blob(chunks,{type:"video/webm"});const url=URL.createObjectURL(blob);
-  const fp=$("#final-player");fp.src=url;
-  const dl=$("#download");dl.href=url;dl.download="podcast_clip_"+Date.now()+".webm";
-  $("#final-info").textContent="\u2713 Done! "+segs.length+" moments \u00b7 "+fmtTime(total)+" \u00b7 "+fmtBytes(blob.size)+" \u00b7 WebM (use CloudConvert for MP4)";
+  const blob=new Blob(chunks,{type:"video/webm"});const blobUrl=URL.createObjectURL(blob);
+  const fp=$("#final-player");fp.src=blobUrl;
+  const dl=$("#download");dl.href=blobUrl;dl.download="podcast_clip_"+Date.now()+".webm";
+  /* Show total clipped / edited duration clearly */
+  $("#final-info").innerHTML=
+    "\u2705 Render complete! " +
+    "<strong>"+segs.length+" moment"+(segs.length===1?"":"s")+" clipped</strong> \u00b7 " +
+    "Total length: <strong>"+fmtTime(total)+"</strong> \u00b7 " +
+    fmtBytes(blob.size)+" \u00b7 WebM (use CloudConvert for MP4)";
   $("#render-box").style.display="none";$("#final-box").style.display="block";
   try{fp.play();}catch(e){}}
 
