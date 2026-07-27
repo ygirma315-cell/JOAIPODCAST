@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 
@@ -75,9 +75,9 @@
   <nav class="stepper" id="stepper">
     <span class="step" data-step="1"><span class="dot">1</span> Video</span>
     <span class="step" data-step="2"><span class="dot">2</span> Transcript</span>
-    <span class="step" data-step="3"><span class="dot">3</span> Options</span>
+    <span class="step" data-step="3"><span class="dot">3</span> Style</span>
     <span class="step" data-step="4"><span class="dot">4</span> Analyze</span>
-    <span class="step" data-step="5"><span class="dot">5</span> Clips</span>
+    <span class="step" data-step="5"><span class="dot">5</span> Final video</span>
   </nav>
 
   <div class="alert" id="alert" hidden></div>
@@ -105,15 +105,11 @@
     <div class="tr-grid">
       <div class="tr-col">
         <h3>🎥 From YouTube (built-in)</h3>
-        <p class="muted small">Choose a source, paste the YouTube link, and we'll grab the transcript.</p>
-        <div class="seg-control" id="yt-source">
-          <button type="button" data-src="1" class="sel">Transcript 1 · API</button>
-          <button type="button" data-src="2">Transcript 2 · Website</button>
-        </div>
+        <p class="muted small">Paste the YouTube link and we'll grab the transcript. If YouTube blocks it, we'll open the transcript page so you can copy-paste it on the Manual side.</p>
         <input type="text" id="yt-url" placeholder="https://www.youtube.com/watch?v=…">
         <button class="btn" id="yt-fetch" type="button">⚡ Fetch transcript</button>
         <p class="muted small" id="yt-status"></p>
-        <button class="btn primary use-btn" id="use-yt" type="button">✓ Use this → Options</button>
+        <button class="btn primary use-btn" id="use-yt" type="button">✓ Use this → Style</button>
       </div>
       <div class="tr-col">
         <h3>📝 Manual</h3>
@@ -124,7 +120,7 @@
         <input type="file" id="tr-input" accept=".srt,.vtt,.txt,text/plain" hidden>
         <div class="or-divider">or paste it</div>
         <textarea id="tr-text" rows="5" placeholder="Paste the transcript text (SRT, VTT or plain text)…"></textarea>
-        <button class="btn primary use-btn" id="use-manual" type="button">✓ Use this → Options</button>
+        <button class="btn primary use-btn" id="use-manual" type="button">✓ Use this → Style</button>
       </div>
     </div>
     <div class="info-grid" id="tr-info" hidden></div>
@@ -135,45 +131,71 @@
 
   <!-- STEP 3 -->
   <section class="card" id="panel-3" hidden>
-    <h2>⚙️ Clip options</h2>
-    <div class="opt-group">
-      <label class="opt-label">Target clip length</label>
-      <div class="seg-control" id="opt-duration"></div>
-    </div>
-    <div class="opt-group">
-      <label class="opt-label">Number of clips</label>
-      <div class="seg-control" id="opt-count"></div>
-    </div>
-    <div class="opt-group">
-      <label class="opt-label">Aspect ratio</label>
-      <div class="seg-control" id="opt-aspect"></div>
-    </div>
-    <div class="opt-group">
-      <label class="opt-label">Caption style</label>
-      <div class="seg-control" id="opt-style"></div>
-    </div>
-    <div class="opt-group">
-      <label class="opt-label">Caption colors</label>
-      <div class="color-row">
-        <label class="color-item"><input type="color" id="opt-color-text" value="#FFFF00"> Text</label>
-        <label class="color-item"><input type="color" id="opt-color-hl" value="#FFFFFF"> Highlight</label>
-        <button class="btn mini ghost" id="colors-reset" type="button">Reset</button>
+    <h2>🎨 Style your edit</h2>
+    <p class="muted small">Pick a caption template and editing effects — this is exactly how the final video gets rendered.</p>
+
+    <div class="opt-section">
+      <h3>💬 Captions</h3>
+      <p class="sec-sub">Word-by-word karaoke captions burned into the video. Pick “No captions” to turn them off.</p>
+      <div class="tpl-grid" id="tpl-grid">
+        <div class="tpl-card sel" data-tpl="bold"><div class="tpl-prev tp-bold">Viral</div><div class="tpl-name">🔥 Bold Pop</div></div>
+        <div class="tpl-card" data-tpl="clean"><div class="tpl-prev tp-clean">Viral</div><div class="tpl-name">✨ Clean</div></div>
+        <div class="tpl-card" data-tpl="neon"><div class="tpl-prev tp-neon">Viral</div><div class="tpl-name">💜 Neon Glow</div></div>
+        <div class="tpl-card" data-tpl="boxed"><div class="tpl-prev tp-boxed"><span>Viral</span></div><div class="tpl-name">⬛ Boxed</div></div>
+        <div class="tpl-card" data-tpl="mono"><div class="tpl-prev tp-mono">Viral</div><div class="tpl-name">⌨ Mono</div></div>
+        <div class="tpl-card" data-tpl="none"><div class="tpl-prev tp-none">🚫</div><div class="tpl-name">No captions</div></div>
+      </div>
+      <div id="cap-settings">
+        <div class="opt-group">
+          <label class="opt-label">Position on screen</label>
+          <div class="seg-control" id="opt-cappos"></div>
+        </div>
+        <div class="opt-group">
+          <label class="opt-label">Caption size</label>
+          <div class="seg-control" id="opt-capsize"></div>
+        </div>
+        <div class="opt-group" id="cap-custom-group">
+          <label class="opt-label">Custom colors (Bold Pop &amp; Clean)</label>
+          <div class="color-row">
+            <label class="color-item"><input type="color" id="opt-color-text" value="#FFFF00"> Text</label>
+            <label class="color-item"><input type="color" id="opt-color-hl" value="#FFFFFF"> Highlight</label>
+            <button class="btn mini ghost" id="colors-reset" type="button">Reset</button>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="opt-group">
-      <label class="opt-label">Extras</label>
-      <div class="toggles">
-        <label class="toggle"><input type="checkbox" id="opt-captions" checked> Karaoke captions</label>
-        <label class="toggle"><input type="checkbox" id="opt-fades" checked> Fade in/out</label>
-        <label class="toggle"><input type="checkbox" id="opt-watermark"> Watermark</label>
+
+    <div class="opt-section">
+      <h3>🎬 Editing</h3>
+      <p class="sec-sub">How the final video is cut, framed and animated.</p>
+      <div class="opt-group">
+        <label class="opt-label">Target clip length</label>
+        <div class="seg-control" id="opt-duration"></div>
       </div>
-      <div id="wm-group" style="display:none;margin-top:10px">
-        <input type="text" id="opt-wm-text" placeholder="@yourhandle" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font:inherit">
+      <div class="opt-group">
+        <label class="opt-label">Moments to include</label>
+        <div class="seg-control" id="opt-count"></div>
+      </div>
+      <div class="opt-group">
+        <label class="opt-label">Frame / aspect ratio</label>
+        <div class="seg-control" id="opt-aspect"></div>
+      </div>
+      <div class="opt-group">
+        <label class="opt-label">Motion &amp; extras</label>
+        <div class="toggles">
+          <label class="toggle"><input type="checkbox" id="opt-fades" checked> Fade in/out between cuts</label>
+          <label class="toggle"><input type="checkbox" id="opt-zoom" checked> Slow punch-in zoom</label>
+          <label class="toggle"><input type="checkbox" id="opt-watermark"> Watermark</label>
+        </div>
+        <div id="wm-group" style="display:none;margin-top:10px">
+          <input type="text" id="opt-wm-text" placeholder="@yourhandle" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font:inherit">
+        </div>
       </div>
     </div>
+
     <div class="actions">
       <button class="btn ghost" data-back="2">← Back</button>
-      <button class="btn primary" id="generate">✨ Find viral clips</button>
+      <button class="btn primary" id="generate">✨ Find moments &amp; render</button>
     </div>
   </section>
 
@@ -186,54 +208,33 @@
 
   <!-- STEP 5 -->
   <section class="card" id="panel-5" hidden>
-    <h2>🎉 Your viral clips</h2>
-    <p class="muted small">Preview the edit, tick/untick clips, then render the final video.</p>
-    <div class="result-layout">
-      <div class="player-col">
-        <div class="video-wrap">
-          <video id="player" controls playsinline></video>
-          <div id="cap-overlay"></div>
-        </div>
-        <div class="tl-head"><b>Edit timeline</b><span id="tl-total"></span></div>
-        <div id="timeline"><div class="playhead" id="playhead"></div></div>
-        <div id="now-playing"></div>
-        <div class="actions" style="margin-top:12px">
-          <button class="btn" id="preview-all">▶ Preview full edit</button>
-          <button class="btn ghost" id="stop-preview">■ Stop</button>
-        </div>
-      </div>
-      <div class="segments-col">
-        <h3>Selected clips</h3>
-        <div id="segment-list"></div>
-        <div class="actions" style="margin-top:12px">
-          <button class="btn" id="update-plan">↻ Update plan</button>
-        </div>
-        <details style="margin-top:16px">
-          <summary style="cursor:pointer;font-weight:600">More candidates</summary>
-          <div id="cand-list" style="margin-top:10px"></div>
-        </details>
-      </div>
-    </div>
-    <div id="export-box">
-      <h3>🎬 Rendering final edit</h3>
-      <div class="bar"><div class="bar-fill" id="export-bar"></div></div>
+    <h2>🎬 Your final edit</h2>
+    <video id="player" style="display:none" playsinline></video>
+    <div id="render-box">
+      <p class="muted" id="render-info"></p>
+      <div class="bar big"><div class="bar-fill" id="export-bar"></div></div>
       <p class="small" id="export-log"></p>
-      <div class="actions" style="margin-top:8px">
-        <a class="btn primary" id="download" style="display:none">⬇ Download video</a>
+      <p class="muted small">The video renders in real time — a 2-minute edit takes about 2 minutes. Keep this tab open and visible 👀 (you'll hear the audio while it cuts).</p>
+      <div class="actions">
         <button class="btn danger mini" id="cancel-export">Cancel</button>
       </div>
     </div>
-    <div class="actions">
-      <button class="btn ghost" data-back="3">← Back to options</button>
-      <button class="btn primary" id="render-final">🎬 Render final edit</button>
-      <button class="btn ghost" id="start-over">Start over</button>
+    <div id="final-box" style="display:none">
+      <video id="final-player" controls playsinline></video>
+      <p class="final-info" id="final-info"></p>
+      <div class="actions">
+        <a class="btn primary" id="download">⬇ Download video</a>
+        <button class="btn" id="render-again">↻ Re-render</button>
+        <button class="btn ghost" data-back="3">← Back to style</button>
+        <button class="btn ghost" id="start-over">Start over</button>
+      </div>
     </div>
   </section>
 </main>
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=8"></script>
-<script src="app-ui.js?v=8"></script>
+<script src="app-core.js?v=9"></script>
+<script src="app-ui.js?v=9"></script>
 </body>
 </html>
