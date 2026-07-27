@@ -10,8 +10,9 @@ const FEATURE_LABELS={audio_energy_mean:"sustained energy",audio_energy_peak:"en
 const WEIGHTS={audio_energy_mean:1.0,audio_energy_peak:1.2,audio_burst:1.5,audio_payoff:1.3,text_arousal:1.6,text_question:0.8,text_exclamation:0.9,text_hook_phrase:1.8,text_punchline:1.0,text_tfidf:1.1,text_repetition:0.8,struct_position:0.5,struct_speech_density:0.9,struct_self_contained:1.0,struct_complete_ending:1.3,text_hook_start:2.0,text_payoff_end:1.2,duration_fit:1.0};
 
 /* ================= STATE ================= */
+/* target_s = TOTAL final video length (not per-clip). count = number of short clips stitched. */
 const S={videoFile:null,videoURL:null,videoDuration:0,sentences:[],candidates:[],selected:[],dropped:new Set(),added:new Set(),audioEnergy:null,audioStats:null,
-  opts:{target_s:60,count:5,aspect:"9:16",capTemplate:"none",capPos:"bottom",capSize:"m",captions:false,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},
+  opts:{target_s:120,count:3,aspect:"9:16",capTemplate:"none",capPos:"bottom",capSize:"m",captions:false,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},
   exporting:false,cancelExport:false};
 let ytReady=false,manualReady=false,aiReady=false;
 
@@ -28,6 +29,7 @@ function goStep(n){for(let i=1;i<=5;i++)$("#panel-"+i).hidden=i!==n;$$(".step").
 function infoGrid(sel,cells){const el=$(sel);el.innerHTML="";cells.forEach(([k,v],i)=>{const d=document.createElement("div");d.className="cell";d.style.animationDelay=(i*60)+"ms";d.innerHTML='<div class="k"></div><div class="v"></div>';d.querySelector(".k").textContent=k;d.querySelector(".v").textContent=v;el.appendChild(d);});el.hidden=false;}
 function buildSegCtrl(sel,vals,labels,key,def){const box=$(sel);box.innerHTML="";vals.forEach((v,i)=>{const b=document.createElement("button");b.type="button";b.textContent=labels?labels[i]:String(v);if(String(def??S.opts[key])===String(v))b.classList.add("sel");b.addEventListener("click",()=>{S.opts[key]=v;box.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");});box.appendChild(b);});}
 function bindDrop(zone,inp,cb){const z=$(zone),i=$(inp);z.addEventListener("click",()=>i.click());z.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();i.click();}});i.addEventListener("change",()=>{if(i.files[0])cb(i.files[0]);});["dragover","dragenter"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.add("drag");}));["dragleave","drop"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.remove("drag");}));z.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)cb(f);});}
+function perClipTarget(totalS,count){const n=Math.max(count||1,1);return Math.max(12,Math.min(75,totalS/n));}
 
 /* ================= LOGIN GATE ================= */
 const GATE_K="am9mcmVpbmQ6ZnJlaW5k";
@@ -134,8 +136,9 @@ async function transcribeWithDeepgram(file,onStatus){
 
 /* ================= STEP 3: OPTIONS ================= */
 function initOpts(){
-  buildSegCtrl("#opt-duration",[30,60,90,120,180],["30 s","1 min","1.5 min","2 min","3 min"],"target_s",60);
-  buildSegCtrl("#opt-count",[3,5,7,10],["3","5","7","10"],"count",5);
+  /* target_s = TOTAL final video length */
+  buildSegCtrl("#opt-duration",[30,45,60,90,120],["30 s","45 s","1 min","1.5 min","2 min"],"target_s",120);
+  buildSegCtrl("#opt-count",[2,3,4],["2 clips","3 clips","4 clips"],"count",3);
   buildSegCtrl("#opt-aspect",["9:16","1:1","16:9"],["\ud83d\udcf1 9:16 vertical","\u25fb 1:1 square","\ud83d\udda5 16:9 wide"],"aspect","9:16");
   buildSegCtrl("#opt-cappos",["bottom","middle","top"],["\u2b07 Bottom","\u25cf Middle","\u2b06 Top"],"capPos","bottom");
   buildSegCtrl("#opt-capsize",["s","m","l"],["Small","Medium","Large"],"capSize","m");
@@ -151,9 +154,10 @@ function initOpts(){
 }
 
 /* ================= SCORING ENGINE ================= */
-function tokenize(txt){return txt.toLowerCase().replace(/[^a-z0-9']/g," ").split(/\s+/).filter(Boolean).map(t=>t.replace(/[^a-z0-9]/g,"")).filter(t=>t&&!STOPWORDS.has(t));}
+function tokenize(txt){return txt.toLowerCase().replace(/[^a-z0-9']/g," ").split(/\s+/).filter(Boolean).map(t=>t.replace(/[^a-z0-9']/g,"")).filter(t=>t&&!STOPWORDS.has(t));}
 function buildCorpus(sents){const docs=sents.map(s=>tokenize(s.text));const df={};for(const doc of docs){const seen=new Set(doc);for(const t of seen)df[t]=(df[t]||0)+1;}const n=Math.max(docs.length,1);const idf={};for(const[t,c]of Object.entries(df))idf[t]=Math.log(n/(1+c))+1;const vals=Object.values(idf);const meanIdf=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:1;const grams={};for(const doc of docs)for(let k=0;k<doc.length-2;k++){const g=doc[k]+"|"+doc[k+1]+"|"+doc[k+2];grams[g]=(grams[g]||0)+1;}const callbacks=new Set(Object.entries(grams).filter(([,c])=>c>=3).map(([g])=>g));return{idf,meanIdf,callbacks};}
-function buildCandidates(sents,targetS){const minLen=5,maxLen=targetS*1.7+20;const lookahead=Math.min(80,Math.max(12,Math.ceil(targetS/2)));const cands=[];for(let i=0;i<sents.length;i++){for(let j=i;j<Math.min(i+lookahead,sents.length);j++){const dur=sents[j].end-sents[i].start;if(dur>maxLen)break;if(dur>=minLen){const span=sents.slice(i,j+1),text=span.map(s=>s.text).join(" "),tokens=tokenize(text);cands.push({id:cands.length,sentLo:i,sentHi:j,start:sents[i].start,end:sents[j].end,duration:dur,text,tokens,sentences:span});}}}return cands;}
+/* idealS = ideal length of ONE short clip (not the whole final video) */
+function buildCandidates(sents,idealS){const minLen=Math.max(8,idealS*0.35);const maxLen=idealS*1.35+8;const lookahead=Math.min(40,Math.max(8,Math.ceil(idealS/2.5)));const cands=[];for(let i=0;i<sents.length;i++){for(let j=i;j<Math.min(i+lookahead,sents.length);j++){const dur=sents[j].end-sents[i].start;if(dur>maxLen)break;if(dur>=minLen){const span=sents.slice(i,j+1),text=span.map(s=>s.text).join(" "),tokens=tokenize(text);cands.push({id:cands.length,sentLo:i,sentHi:j,start:sents[i].start,end:sents[j].end,duration:dur,text,tokens,sentences:span});}}}return cands;}
 function extractFeatures(c,corpus,totalDur,ae,ideal,astats){const low=c.text.toLowerCase(),f={};
   f.text_arousal=c.tokens.reduce((s,t)=>s+(AROUSAL[t]||0),0)/Math.max(c.tokens.length,1);
   f.text_question=low.includes("?")?1:0;
@@ -171,7 +175,7 @@ function extractFeatures(c,corpus,totalDur,ae,ideal,astats){const low=c.text.toL
   f.struct_complete_ending=/[.!?]\s*$/.test(c.text.trim())?1:0;
   f.struct_speech_density=Math.min(c.tokens.length/Math.max(c.duration,1)/3,1);
   const rp=c.start/Math.max(totalDur,1);f.struct_position=(rp<0.12||rp>0.82)?0.8:0;
-  const sigma=Math.max(ideal*0.6,10);f.duration_fit=Math.exp(-((c.duration-ideal)**2)/(2*sigma*sigma));
+  const sigma=Math.max(ideal*0.45,6);f.duration_fit=Math.exp(-((c.duration-ideal)**2)/(2*sigma*sigma));
   if(ae&&ae.length&&astats){const i0=Math.max(0,Math.floor(c.start)),i1=Math.min(ae.length-1,Math.floor(c.end));const sl=ae.slice(i0,i1+1);
     if(sl.length){const mean=sl.reduce((a,b)=>a+b,0)/sl.length,peak=arrMax(sl);f.audio_energy_mean=mean;f.audio_energy_peak=peak;
       let maxZ=0;for(const x of sl){const z=(x-astats.mean)/astats.std;if(z>maxZ)maxZ=z;}f.audio_burst=Math.min(Math.max(maxZ,0)/3,1);
@@ -184,8 +188,8 @@ function jaccard(a,b){let inter=0;for(const t of a)if(b.has(t))inter++;const uni
 function selectTop(scored,n){const sel=[];if(!scored.length)return sel;const maxScore=scored[0].score||1;const pool=scored.slice(0,400);for(const c of pool)c.tokenSet=c.tokenSet||new Set(c.tokens);
   while(sel.length<n){let best=null,bestVal=-Infinity;
     for(const c of pool){if(sel.includes(c))continue;if(sel.some(s=>!(c.sentHi<s.sentLo||s.sentHi<c.sentLo)))continue;
-      let pen=0;for(const s of sel){pen=Math.max(pen,jaccard(c.tokenSet,s.tokenSet));const gap=Math.abs(c.start-s.start);if(gap<60)pen=Math.max(pen,(60-gap)/60*0.6);}
-      const val=c.score-0.75*pen*maxScore;if(val>bestVal){bestVal=val;best=c;}}
+      let pen=0;for(const s of sel){pen=Math.max(pen,jaccard(c.tokenSet,s.tokenSet));const gap=Math.abs(c.start-s.start);if(gap<45)pen=Math.max(pen,(45-gap)/45*0.7);}
+      const val=c.score-0.8*pen*maxScore;if(val>bestVal){bestVal=val;best=c;}}
     if(!best)break;sel.push(best);}
   return sel.sort((a,b)=>a.start-b.start);}
 
@@ -209,43 +213,132 @@ function computeSentenceScores(sentences,corpus,ae,astats){
   const lo=arrMin(raw),hi=arrMax(raw);
   return raw.map(v=>hi>lo?(v-lo)/(hi-lo):0.5);}
 
-/* ---- Within a chosen region, drop the weakest interior sentences until it hits the target length. ----
-   What's left, in chronological order, becomes a set of jump-cut sub-clips (only the good lines). */
-function compressRegion(region,sentences,sentScore,targetS){
+/* ---- Aggressively cut a region down to targetDur seconds by dropping weak lines ---- */
+function compressRegion(region,sentences,sentScore,targetDur){
   const lo=region.sentLo,hi=region.sentHi;
   if(hi<=lo)return[{sentLo:lo,sentHi:lo,cs:sentences[lo].start,ce:sentences[lo].end}];
   const keep=new Set();for(let i=lo;i<=hi;i++)keep.add(i);
   function totalDur(){let d=0;for(const i of keep)d+=Math.max(sentences[i].end-sentences[i].start,0);return d;}
-  const originalDur=totalDur();
-  const targetDur=Math.min(targetS,originalDur);
-  const minKeep=Math.max(2,Math.ceil((hi-lo+1)*0.4));
-  while(totalDur()>targetDur*1.1&&keep.size>minKeep){
+  const hardMin=1;
+  const floorDur=Math.min(10,Math.max(6,targetDur*0.45));
+  /* Drop weakest lines until we're at/under target. Prefer interior drops; then weaker end. */
+  let guard=0;
+  while(totalDur()>targetDur*1.02&&keep.size>hardMin&&guard++<400){
     const arr=[...keep].sort((a,b)=>a-b);
     let worstIdx=-1,worstScore=Infinity;
-    for(let k=1;k<arr.length-1;k++){const i=arr[k];const sc=sentScore[i]||0;if(sc<worstScore){worstScore=sc;worstIdx=i;}}
-    if(worstIdx<0)break;
+    if(arr.length>2){
+      for(let k=1;k<arr.length-1;k++){const i=arr[k];const sc=sentScore[i]||0;if(sc<worstScore){worstScore=sc;worstIdx=i;}}
+    }
+    if(worstIdx<0){
+      const first=arr[0],last=arr[arr.length-1];
+      /* Prefer dropping the end so hooks at the start survive */
+      worstIdx=((sentScore[last]||0)<=(sentScore[first]||0)+0.05)?last:first;
+    }
+    const dropDur=Math.max(sentences[worstIdx].end-sentences[worstIdx].start,0);
+    if(totalDur()-dropDur<floorDur&&totalDur()<=targetDur*1.2)break;
     keep.delete(worstIdx);
   }
+  /* If still way over (one giant sentence), hard-trim timestamps later via refine */
   const arr=[...keep].sort((a,b)=>a-b);
+  if(!arr.length)return[{sentLo:lo,sentHi:lo,cs:sentences[lo].start,ce:Math.min(sentences[lo].end,sentences[lo].start+targetDur)}];
   const cuts=[];let runStart=arr[0];
   for(let k=0;k<arr.length;k++){
     const atEnd=k+1>=arr.length||arr[k+1]!==arr[k]+1;
     if(atEnd){const runEnd=arr[k];cuts.push({sentLo:runStart,sentHi:runEnd,cs:sentences[runStart].start,ce:sentences[runEnd].end});if(k+1<arr.length)runStart=arr[k+1];}
   }
   return cuts;}
-function refineCutBounds(cut){const ae=S.audioEnergy;let cs=cut.cs,ce=cut.ce;
-  if(ae&&ae.length){let g=0;while(g++<4&&ce-cs>2){const i=Math.floor(cs);if(i>=0&&i<ae.length&&ae[i]<0.04)cs+=0.3;else break;}
-    g=0;while(g++<4&&ce-cs>2){const i=Math.floor(ce);if(i>=0&&i<ae.length&&ae[i]<0.04)ce-=0.3;else break;}}
-  cs=Math.max(0,cs-0.12);return{cs,ce};}
-function buildMomentCuts(regions,sentences,sentScore,targetS){
+function refineCutBounds(cut,maxDur){const ae=S.audioEnergy;let cs=cut.cs,ce=cut.ce;
+  if(ae&&ae.length){let g=0;while(g++<6&&ce-cs>2){const i=Math.floor(cs);if(i>=0&&i<ae.length&&ae[i]<0.04)cs+=0.25;else break;}
+    g=0;while(g++<6&&ce-cs>2){const i=Math.floor(ce);if(i>=0&&i<ae.length&&ae[i]<0.04)ce-=0.25;else break;}}
+  cs=Math.max(0,cs-0.08);
+  /* Hard cap a single cut so one long monologue can't blow the budget */
+  if(maxDur&&ce-cs>maxDur)ce=cs+maxDur;
+  return{cs,ce};}
+function cutDurOf(cuts){return cuts.reduce((n,c)=>n+Math.max(c.ce-c.cs,0),0);}
+function avgCutScore(cuts,sentScore){if(!cuts.length)return 0;let s=0,n=0;for(const c of cuts){for(let i=c.sentLo;i<=c.sentHi;i++){s+=sentScore[i]||0;n++;}}return n?s/n:0;}
+
+/* totalTargetS = desired TOTAL final video length across all clips combined */
+function buildMomentCuts(regions,sentences,sentScore,totalTargetS){
+  const n=Math.max(regions.length,1);
+  /* Each clip gets an equal slice of the total budget (e.g. 120s / 3 = 40s each) */
+  let perClip=totalTargetS/n;
+  perClip=Math.max(12,Math.min(70,perClip));
+  const maxSingleCut=Math.min(perClip,45);
+
   for(const r of regions){
-    const rawCuts=compressRegion(r,sentences,sentScore,targetS);
-    let cuts=rawCuts.map(c=>{const rb=refineCutBounds(c);return{cs:rb.cs,ce:rb.ce,sentLo:c.sentLo,sentHi:c.sentHi};});
+    const rawCuts=compressRegion(r,sentences,sentScore,perClip);
+    let cuts=rawCuts.map(c=>{const rb=refineCutBounds(c,maxSingleCut);return{cs:rb.cs,ce:rb.ce,sentLo:c.sentLo,sentHi:c.sentHi};})
+      .filter(c=>c.ce-c.cs>=0.4);
     cuts.sort((a,b)=>a.cs-b.cs);
-    const merged=[];for(const c of cuts){const last=merged[merged.length-1];if(last&&c.cs-last.ce<0.25){last.ce=Math.max(last.ce,c.ce);}else merged.push({cs:c.cs,ce:c.ce,sentLo:c.sentLo,sentHi:c.sentHi});}
+    /* Merge only tiny gaps so jump-cuts stay snappy */
+    const merged=[];
+    for(const c of cuts){
+      const last=merged[merged.length-1];
+      if(last&&c.cs-last.ce<0.18){last.ce=Math.max(last.ce,c.ce);last.sentHi=c.sentHi;}
+      else merged.push({cs:c.cs,ce:c.ce,sentLo:c.sentLo,sentHi:c.sentHi});
+    }
+    /* If this moment is still over its share, drop weakest sub-cuts */
+    while(cutDurOf(merged)>perClip*1.08&&merged.length>1){
+      let wi=0,ws=Infinity;
+      for(let i=0;i<merged.length;i++){
+        /* Keep first cut of the moment (hook) unless everything else is gone */
+        if(i===0&&merged.length>2)continue;
+        const sc=avgCutScore([merged[i]],sentScore);
+        if(sc<ws){ws=sc;wi=i;}
+      }
+      merged.splice(wi,1);
+    }
+    /* Final hard trim on last cut if still slightly over */
+    let d=cutDurOf(merged);
+    if(d>perClip*1.05&&merged.length){
+      const last=merged[merged.length-1];
+      const overflow=d-perClip;
+      last.ce=Math.max(last.cs+0.5,last.ce-overflow);
+    }
     r.cuts=merged;
-    r.cutDuration=r.cuts.reduce((n,c)=>n+(c.ce-c.cs),0);
+    r.cutDuration=cutDurOf(merged);
+    r._avgScore=avgCutScore(merged,sentScore);
   }
+
+  /* Global budget pass: if sum of all moments still exceeds total target, drop weakest whole moments first, then trim */
+  let total=regions.reduce((s,r)=>s+(r.cutDuration||0),0);
+  const budget=totalTargetS*1.08;
+  if(total>budget&&regions.length>1){
+    const ranked=[...regions].sort((a,b)=>(a._avgScore||0)-(b._avgScore||0));
+    for(const r of ranked){
+      if(total<=budget||regions.filter(x=>x.cuts&&x.cuts.length).length<=2)break;
+      /* Don't wipe a moment entirely if we'd go below 2 clips */
+      if(regions.filter(x=>x.cuts&&x.cuts.length).length<=2)break;
+      total-=r.cutDuration||0;
+      r.cuts=[];r.cutDuration=0;
+    }
+  }
+  total=regions.reduce((s,r)=>s+(r.cutDuration||0),0);
+  if(total>budget){
+    const scale=totalTargetS/Math.max(total,0.001);
+    for(const r of regions){
+      if(!r.cuts||!r.cuts.length)continue;
+      for(const c of r.cuts){
+        const mid=(c.cs+c.ce)/2;const half=(c.ce-c.cs)*scale/2;
+        c.cs=mid-half;c.ce=mid+half;
+      }
+      /* Prefer trimming from the end of each cut instead of both sides when scale is mild */
+      if(scale>0.7){
+        /* re-apply end-trim style for natural speech starts */
+        let need=cutDurOf(r.cuts)-perClip;
+        if(need>0){
+          for(let i=r.cuts.length-1;i>=0&&need>0;i--){
+            const c=r.cuts[i];const room=Math.max(0,(c.ce-c.cs)-0.5);
+            const take=Math.min(room,need);c.ce-=take;need-=take;
+          }
+          r.cuts=r.cuts.filter(c=>c.ce-c.cs>=0.4);
+        }
+      }
+      r.cutDuration=cutDurOf(r.cuts);
+    }
+  }
+  /* Drop empty moments */
+  for(const r of regions){if(!r.cuts)r.cuts=[];r.cutDuration=cutDurOf(r.cuts);}
   return regions;}
 
 /* ================= AUDIO ANALYSIS ================= */
