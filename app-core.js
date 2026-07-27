@@ -10,7 +10,6 @@ const FEATURE_LABELS={audio_energy_mean:"sustained energy",audio_energy_peak:"en
 const WEIGHTS={audio_energy_mean:1.0,audio_energy_peak:1.2,audio_burst:1.5,audio_payoff:1.3,text_arousal:1.6,text_question:0.8,text_exclamation:0.9,text_hook_phrase:1.8,text_punchline:1.0,text_tfidf:1.1,text_repetition:0.8,struct_position:0.5,struct_speech_density:0.9,struct_self_contained:1.0,struct_complete_ending:1.3,text_hook_start:2.0,text_payoff_end:1.2,duration_fit:1.4};
 
 /* ================= STATE ================= */
-/* target_s = final video length. Always ONE best clip — no clip-count choice. */
 const S={videoFile:null,videoURL:null,videoDuration:0,sentences:[],candidates:[],selected:[],dropped:new Set(),added:new Set(),audioEnergy:null,audioStats:null,
   opts:{target_s:120,count:1,aspect:"9:16",capTemplate:"none",capPos:"bottom",capSize:"m",captions:false,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},
   exporting:false,cancelExport:false};
@@ -29,14 +28,7 @@ function goStep(n){for(let i=1;i<=5;i++)$("#panel-"+i).hidden=i!==n;$$(".step").
 function infoGrid(sel,cells){const el=$(sel);el.innerHTML="";cells.forEach(([k,v],i)=>{const d=document.createElement("div");d.className="cell";d.style.animationDelay=(i*60)+"ms";d.innerHTML='<div class="k"></div><div class="v"></div>';d.querySelector(".k").textContent=k;d.querySelector(".v").textContent=v;el.appendChild(d);});el.hidden=false;}
 function buildSegCtrl(sel,vals,labels,key,def){const box=$(sel);if(!box)return;box.innerHTML="";vals.forEach((v,i)=>{const b=document.createElement("button");b.type="button";b.textContent=labels?labels[i]:String(v);if(String(def??S.opts[key])===String(v))b.classList.add("sel");b.addEventListener("click",()=>{S.opts[key]=v;box.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");});box.appendChild(b);});}
 function bindDrop(zone,inp,cb){const z=$(zone),i=$(inp);z.addEventListener("click",()=>i.click());z.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();i.click();}});i.addEventListener("change",()=>{if(i.files[0])cb(i.files[0]);});["dragover","dragenter"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.add("drag");}));["dragleave","drop"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.remove("drag");}));z.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)cb(f);});}
-
-/* Acceptable final length window. For 2:00 → 1:45–2:20. Scales with chosen target. */
-function durationWindow(targetS){
-  const ideal=Math.max(15,targetS||120);
-  const minS=Math.max(ideal-15,Math.round(ideal*0.875));
-  const maxS=Math.min(ideal+20,Math.round(ideal*1.167));
-  return{ideal,minS,maxS};
-}
+function durationWindow(targetS){const ideal=Math.max(15,targetS||120);const minS=Math.max(ideal-15,Math.round(ideal*0.875));const maxS=Math.min(ideal+20,Math.round(ideal*1.167));return{ideal,minS,maxS};}
 
 /* ================= LOGIN GATE ================= */
 const GATE_K="am9mcmVpbmQ6ZnJlaW5k";
@@ -53,8 +45,7 @@ function initGate(){const g=$("#login-gate");if(!g)return;
   setTheme(localStorage.getItem("vs_theme")==="light");
   const plP=$("#plan-pro"),plF=$("#plan-free"),paneP=$("#pane-pro"),paneF=$("#pane-free");
   function selPlan(pro){plP.classList.toggle("sel",pro);plF.classList.toggle("sel",!pro);paneP.style.display=pro?"flex":"none";paneF.style.display=pro?"none":"block";}
-  plP.onclick=()=>selPlan(true);
-  plF.onclick=()=>selPlan(false);
+  plP.onclick=()=>selPlan(true);plF.onclick=()=>selPlan(false);
   plP.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();selPlan(true);}};
   plF.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();selPlan(false);}};
   selPlan(true);
@@ -73,44 +64,35 @@ function parseSRT(t){const out=[];for(const blk of t.trim().split(/\n\n+/)){cons
 function alignTXT(text,dur){const sents=(text.match(/[^.!?]+[.!?]+/g)||[text]).map(s=>s.trim()).filter(Boolean);const words=text.split(/\s+/).filter(Boolean).length;const wps=Math.max(words/Math.max(dur,1),0.5);const out=[];let t=0;for(const s of sents){const w=s.split(/\s+/).filter(Boolean).length;const d=Math.max(w/wps,0.5);out.push({start:t,end:Math.min(t+d,dur),text:s});t+=d;}return out;}
 function handleTranscript(fname,text){showAlert("");const t=text.trim();if(t.length<10){showAlert("Transcript is too short.");return;}let sents=[];if(/-->/.test(t)){sents=t.startsWith("WEBVTT")?parseSRT(t.replace(/^WEBVTT[^\n]*\n/,"\n")):parseSRT(t);}else sents=alignTXT(t,S.videoDuration||3600);if(!sents.length){showAlert("Could not parse transcript. Check the format.");return;}S.sentences=sents;manualReady=true;const wc=sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);const timed=/-->/.test(t);infoGrid("#tr-info",[["Format",timed?"SRT/VTT (timed)":"TXT (estimated)"],["Words",String(wc)],["Sentences",String(sents.length)],["Cover",fmtTime(sents[0].start)+" \u2013 "+fmtTime(sents[sents.length-1].end)]]);}
 
-function ytId(input){const s=(input||"").trim();const m=s.match(/[?&]v=([\w-]{11})/)||s.match(/youtu\.be\/([\w-]{11})/)||s.match(/shorts\/([\w-]{11})/)||s.match(/embed\/([\w-]{11})/)||s.match(/transcript\?v=([\w-]{11})/);if(m)return m[1];if(/^[\w-]{11}$/.test(s))return s;return null;}
-async function fetchViaProxies(target){const proxies=[u=>"https://api.allorigins.win/raw?url="+encodeURIComponent(u),u=>"https://corsproxy.io/?url="+encodeURIComponent(u)];
-  for(const p of proxies){try{const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),20000);const res=await fetch(p(target),{signal:ctl.signal});clearTimeout(to);if(res.ok){const txt=await res.text();if(txt&&txt.length>500)return txt;}}catch(e){}}
-  return null;}
-function parseTranscriptHTML(html){const doc=new DOMParser().parseFromString(html,"text/html");
-  const nodes=Array.from(doc.querySelectorAll("[data-start]"));const segs=[];
-  for(const n of nodes){const st=parseFloat(n.getAttribute("data-start"));const tx=(n.textContent||"").replace(/\s+/g," ").trim();if(!isNaN(st)&&tx)segs.push({start:st,text:tx});}
-  if(segs.length>3){segs.sort((a,b)=>a.start-b.start);const out=segs.map((s,i)=>({start:s.start,end:i+1<segs.length?Math.max(segs[i+1].start,s.start+0.5):s.start+4,text:s.text}));return{sents:out};}
-  const cont=doc.querySelector("#transcript")||doc.querySelector(".transcript")||doc.querySelector("main")||doc.body;
-  const raw=cont?cont.textContent.replace(/\s+/g," ").trim():"";
-  if(raw.length>300)return{text:raw};
-  return null;}
-async function fetchYouTube(){const inp=$("#yt-url").value,st=$("#yt-status"),btn=$("#yt-fetch");
-  const id=ytId(inp);
-  if(!id){st.textContent="\u26a0 That doesn't look like a YouTube link. Paste the full video URL.";return false;}
-  btn.disabled=true;
-  st.textContent="\u23f3 Fetching the transcript\u2026";
-  const target="https://youtubetotranscript.com/transcript?v="+id;
-  let html=null;
-  try{html=await fetchViaProxies(target);}catch(e){}
-  btn.disabled=false;
-  if(!html){st.innerHTML='Automatic fetch was blocked. <a class="link" href="'+target+'" target="_blank" rel="noopener">I opened the transcript page for you</a> \u2014 press \u201cCopy Transcript\u201d there, then paste it on the Manual side.';window.open(target,"_blank");return false;}
-  const parsed=parseTranscriptHTML(html);
-  if(!parsed){st.innerHTML='No transcript found \u2014 the video may have captions disabled. <a class="link" href="'+target+'" target="_blank" rel="noopener">Check it here</a>.';return false;}
-  if(parsed.sents){S.sentences=parsed.sents;ytReady=true;
-    const wc=parsed.sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);
-    infoGrid("#tr-info",[["Source","YouTube (timed)"],["Words",String(wc)],["Sentences",String(parsed.sents.length)],["Cover",fmtTime(parsed.sents[0].start)+" \u2013 "+fmtTime(parsed.sents[parsed.sents.length-1].end)]]);
-    st.textContent="\u2713 Transcript loaded with real timestamps \u2014 hit Use this!";return true;}
-  handleTranscript(null,parsed.text);
-  if(S.sentences.length){ytReady=true;st.textContent="\u2713 Transcript loaded \u2014 hit Use this!";return true;}
-  return false;}
-
-/* ---- AI Auto-Transcribe (Deepgram) ---- */
+/* ---- AI Auto-Transcribe (Deepgram) with approximate % progress ---- */
 const DEEPGRAM_API_KEY="60b4a66f441c27464b94570702c75acd1ebf2f6f";
-async function decodeAudioBuffer(file){const ab=await file.arrayBuffer();const ctx=new(window.AudioContext||window.webkitAudioContext)();const audio=await ctx.decodeAudioData(ab);await ctx.close();return audio;}
-async function resampleTo16kMono(buffer){const targetRate=16000;const OfflineCtx=window.OfflineAudioContext||window.webkitOfflineAudioContext;const offline=new OfflineCtx(1,Math.max(1,Math.ceil(buffer.duration*targetRate)),targetRate);const src=offline.createBufferSource();src.buffer=buffer;src.connect(offline.destination);src.start(0);return await offline.startRendering();}
+async function decodeAudioBuffer(file,onTick){
+  onTick&&onTick(6,"Reading video file\u2026");
+  const ab=await file.arrayBuffer();
+  onTick&&onTick(14,"Opening audio decoder\u2026");
+  const ctx=new(window.AudioContext||window.webkitAudioContext)();
+  onTick&&onTick(22,"Decoding audio track\u2026");
+  const audio=await ctx.decodeAudioData(ab);
+  await ctx.close();
+  onTick&&onTick(32,"Audio decoded");
+  return audio;}
+async function resampleTo16kMono(buffer,onTick){
+  const targetRate=16000;
+  const OfflineCtx=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+  const frames=Math.max(1,Math.ceil(buffer.duration*targetRate));
+  const offline=new OfflineCtx(1,frames,targetRate);
+  const src=offline.createBufferSource();src.buffer=buffer;src.connect(offline.destination);src.start(0);
+  onTick&&onTick(38,"Resampling to 16kHz mono\u2026");
+  /* Fake smooth progress while offline render runs (no native progress API) */
+  let fake=38;let alive=true;
+  const pulse=setInterval(()=>{if(!alive)return;fake=Math.min(54,fake+1.2);onTick&&onTick(fake,fake<48?"Resampling audio\u2026":"Halfway there \u2014 still preparing\u2026");},280);
+  try{const out=await offline.startRendering();alive=false;clearInterval(pulse);onTick&&onTick(56,"Resample complete");return out;}
+  catch(e){alive=false;clearInterval(pulse);throw e;}}
 function floatTo16BitPCM(float32){const buf=new ArrayBuffer(float32.length*2);const view=new DataView(buf);let offset=0;for(let i=0;i<float32.length;i++,offset+=2){let s=Math.max(-1,Math.min(1,float32[i]));view.setInt16(offset,s<0?s*0x8000:s*0x7FFF,true);}return buf;}
-function encodeWav(buffer){const numChannels=1,sampleRate=buffer.sampleRate;const samples=buffer.getChannelData(0);const pcm=floatTo16BitPCM(samples);const blockAlign=numChannels*2,byteRate=sampleRate*blockAlign,dataSize=pcm.byteLength,headerSize=44;
+function encodeWav(buffer,onTick){
+  onTick&&onTick(60,"Encoding WAV\u2026");
+  const numChannels=1,sampleRate=buffer.sampleRate;const samples=buffer.getChannelData(0);const pcm=floatTo16BitPCM(samples);
+  const blockAlign=numChannels*2,byteRate=sampleRate*blockAlign,dataSize=pcm.byteLength,headerSize=44;
   const wavBuf=new ArrayBuffer(headerSize+dataSize);const view=new DataView(wavBuf);
   function writeStr(off,str){for(let i=0;i<str.length;i++)view.setUint8(off+i,str.charCodeAt(i));}
   writeStr(0,"RIFF");view.setUint32(4,36+dataSize,true);writeStr(8,"WAVE");
@@ -118,42 +100,70 @@ function encodeWav(buffer){const numChannels=1,sampleRate=buffer.sampleRate;cons
   view.setUint32(24,sampleRate,true);view.setUint32(28,byteRate,true);view.setUint16(32,blockAlign,true);view.setUint16(34,16,true);
   writeStr(36,"data");view.setUint32(40,dataSize,true);
   new Uint8Array(wavBuf,headerSize).set(new Uint8Array(pcm));
+  onTick&&onTick(66,"Audio ready for AI");
   return new Blob([wavBuf],{type:"audio/wav"});}
+function postDeepgram(wavBlob,onTick){
+  return new Promise((resolve,reject)=>{
+    const url="https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&utterances=true&language=en";
+    const xhr=new XMLHttpRequest();
+    xhr.open("POST",url,true);
+    xhr.setRequestHeader("Authorization","Token "+DEEPGRAM_API_KEY);
+    xhr.setRequestHeader("Content-Type","audio/wav");
+    xhr.upload.onprogress=e=>{
+      if(e.lengthComputable&&e.total>0){
+        const up=e.loaded/e.total;
+        const pct=66+up*16; /* 66 → 82 */
+        onTick&&onTick(pct,up<0.95?("Uploading to AI \u2014 "+Math.round(up*100)+"%"):"Upload almost done\u2026");
+      }else onTick&&onTick(72,"Uploading to speech AI\u2026");
+    };
+    xhr.upload.onload=()=>onTick&&onTick(84,"AI is listening\u2026 almost there");
+    let think=84;const thinkTimer=setInterval(()=>{think=Math.min(94,think+0.6);onTick&&onTick(think,think<90?"AI is listening\u2026":"Almost there \u2014 wrapping up\u2026");},400);
+    xhr.onreadystatechange=()=>{
+      if(xhr.readyState===4){
+        clearInterval(thinkTimer);
+        if(xhr.status>=200&&xhr.status<300){
+          onTick&&onTick(96,"Building timed script\u2026");
+          try{resolve(JSON.parse(xhr.responseText));}catch(e){reject(new Error("Bad AI response"));}
+        }else{
+          const extra=(xhr.responseText||"").slice(0,180);
+          reject(new Error("AI service returned "+xhr.status+(extra?" \u2014 "+extra:"")));
+        }
+      }
+    };
+    xhr.onerror=()=>{clearInterval(thinkTimer);reject(new Error("Network error talking to AI"));};
+    onTick&&onTick(68,"Starting upload to speech AI\u2026");
+    xhr.send(wavBlob);
+  });}
 async function transcribeWithDeepgram(file,onStatus){
-  onStatus&&onStatus("Decoding audio track\u2026");
-  const decoded=await decodeAudioBuffer(file);
-  onStatus&&onStatus("Preparing audio for the AI (this can take a bit for long videos)\u2026");
-  const mono16k=await resampleTo16kMono(decoded);
-  const wavBlob=encodeWav(mono16k);
-  onStatus&&onStatus("Sending to speech-to-text AI\u2026");
-  const url="https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&utterances=true&language=en";
-  const res=await fetch(url,{method:"POST",headers:{"Authorization":"Token "+DEEPGRAM_API_KEY,"Content-Type":"audio/wav"},body:wavBlob});
-  if(!res.ok){let extra="";try{extra=(await res.text()).slice(0,180);}catch(e){}throw new Error("AI service returned "+res.status+(extra?" \u2014 "+extra:""));}
-  const data=await res.json();
+  /* onStatus(message, percent 0-100) */
+  const tick=(pct,msg)=>{const p=Math.round(Math.min(100,Math.max(0,pct)));onStatus&&onStatus(msg,p);};
+  tick(3,"Starting AI transcription\u2026");
+  const decoded=await decodeAudioBuffer(file,tick);
+  const mono16k=await resampleTo16kMono(decoded,tick);
+  const wavBlob=encodeWav(mono16k,tick);
+  const data=await postDeepgram(wavBlob,tick);
+  tick(97,"Parsing transcript\u2026");
   const utter=data&&data.results&&data.results.utterances;
-  if(utter&&utter.length)return utter.map(u=>({start:u.start,end:u.end,text:(u.transcript||"").trim()})).filter(s=>s.text);
-  const alt=data&&data.results&&data.results.channels&&data.results.channels[0]&&data.results.channels[0].alternatives&&data.results.channels[0].alternatives[0];
-  const words=(alt&&alt.words)||[];
-  if(!words.length)return[];
-  const sents=[];let cur=[];
-  for(const w of words){cur.push(w);const pw=w.punctuated_word||w.word||"";if(/[.!?]$/.test(pw)||cur.length>28){sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});cur=[];}}
-  if(cur.length)sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});
+  let sents=[];
+  if(utter&&utter.length)sents=utter.map(u=>({start:u.start,end:u.end,text:(u.transcript||"").trim()})).filter(s=>s.text);
+  else{
+    const alt=data&&data.results&&data.results.channels&&data.results.channels[0]&&data.results.channels[0].alternatives&&data.results.channels[0].alternatives[0];
+    const words=(alt&&alt.words)||[];
+    if(words.length){let cur=[];for(const w of words){cur.push(w);const pw=w.punctuated_word||w.word||"";if(/[.!?]$/.test(pw)||cur.length>28){sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});cur=[];}}if(cur.length)sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});}
+  }
+  tick(100,"Done!");
   return sents;}
 
 /* ================= STEP 3: OPTIONS ================= */
 function initOpts(){
-  /* Only duration — AI always picks ONE best clip near this length */
   buildSegCtrl("#opt-duration",[30,45,60,90,120],["30 s","45 s","1 min","1.5 min","2 min"],"target_s",120);
   S.opts.count=1;
   buildSegCtrl("#opt-aspect",["9:16","1:1","16:9"],["\ud83d\udcf1 9:16 vertical","\u25fb 1:1 square","\ud83d\udda5 16:9 wide"],"aspect","9:16");
   buildSegCtrl("#opt-cappos",["bottom","middle","top"],["\u2b07 Bottom","\u25cf Middle","\u2b06 Top"],"capPos","bottom");
   buildSegCtrl("#opt-capsize",["s","m","l"],["Small","Medium","Large"],"capSize","m");
   $$("#tpl-grid .tpl-card").forEach(c=>c.addEventListener("click",()=>{
-    const tpl=c.dataset.tpl;
-    S.opts.capTemplate=tpl;
-    S.opts.captions=tpl!=="none";
-    $$("#tpl-grid .tpl-card").forEach(x=>x.classList.remove("sel"));
-    c.classList.add("sel");
+    const tpl=c.dataset.tpl;S.opts.capTemplate=tpl;S.opts.captions=tpl!=="none";
+    $$("#tpl-grid .tpl-card").forEach(x=>x.classList.remove("sel"));c.classList.add("sel");
     const cs=$("#cap-settings");if(cs)cs.style.display=tpl==="none"?"none":"block";
     const cc=$("#cap-custom-group");if(cc)cc.style.display=(tpl==="bold"||tpl==="clean")?"block":"none";
   }));
@@ -162,209 +172,36 @@ function initOpts(){
 /* ================= SCORING ENGINE ================= */
 function tokenize(txt){return txt.toLowerCase().replace(/[^a-z0-9']/g," ").split(/\s+/).filter(Boolean).map(t=>t.replace(/[^a-z0-9']/g,"")).filter(t=>t&&!STOPWORDS.has(t));}
 function buildCorpus(sents){const docs=sents.map(s=>tokenize(s.text));const df={};for(const doc of docs){const seen=new Set(doc);for(const t of seen)df[t]=(df[t]||0)+1;}const n=Math.max(docs.length,1);const idf={};for(const[t,c]of Object.entries(df))idf[t]=Math.log(n/(1+c))+1;const vals=Object.values(idf);const meanIdf=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:1;const grams={};for(const doc of docs)for(let k=0;k<doc.length-2;k++){const g=doc[k]+"|"+doc[k+1]+"|"+doc[k+2];grams[g]=(grams[g]||0)+1;}const callbacks=new Set(Object.entries(grams).filter(([,c])=>c>=3).map(([g])=>g));return{idf,meanIdf,callbacks};}
-
-/* Find source regions long enough to crop down to the target window */
-function buildCandidates(sents,idealS){
-  const{minS,maxS,ideal}=durationWindow(idealS);
-  /* Need extra raw material so filler can be cut out */
-  const minLen=Math.max(20,minS*0.9);
-  const maxLen=ideal*2.2+40;
-  const lookahead=Math.min(120,Math.max(20,Math.ceil(ideal/1.2)));
-  const cands=[];
-  for(let i=0;i<sents.length;i++){
-    for(let j=i;j<Math.min(i+lookahead,sents.length);j++){
-      const dur=sents[j].end-sents[i].start;
-      if(dur>maxLen)break;
-      if(dur>=minLen){
-        const span=sents.slice(i,j+1),text=span.map(s=>s.text).join(" "),tokens=tokenize(text);
-        cands.push({id:cands.length,sentLo:i,sentHi:j,start:sents[i].start,end:sents[j].end,duration:dur,text,tokens,sentences:span});
-      }
-    }
-  }
-  return cands;
-}
+function buildCandidates(sents,idealS){const{minS,ideal}=durationWindow(idealS);const minLen=Math.max(20,minS*0.9);const maxLen=ideal*2.2+40;const lookahead=Math.min(120,Math.max(20,Math.ceil(ideal/1.2)));const cands=[];for(let i=0;i<sents.length;i++){for(let j=i;j<Math.min(i+lookahead,sents.length);j++){const dur=sents[j].end-sents[i].start;if(dur>maxLen)break;if(dur>=minLen){const span=sents.slice(i,j+1),text=span.map(s=>s.text).join(" "),tokens=tokenize(text);cands.push({id:cands.length,sentLo:i,sentHi:j,start:sents[i].start,end:sents[j].end,duration:dur,text,tokens,sentences:span});}}}return cands;}
 function extractFeatures(c,corpus,totalDur,ae,ideal,astats){const low=c.text.toLowerCase(),f={};
   f.text_arousal=c.tokens.reduce((s,t)=>s+(AROUSAL[t]||0),0)/Math.max(c.tokens.length,1);
-  f.text_question=low.includes("?")?1:0;
-  f.text_exclamation=Math.min((c.text.match(/!/g)||[]).length,3)/3;
-  f.text_hook_phrase=HOOK_PHRASES.some(p=>low.includes(p))?1:0;
-  f.text_punchline=PUNCHLINE_MARKERS.some(p=>low.includes(p))?1:0;
+  f.text_question=low.includes("?")?1:0;f.text_exclamation=Math.min((c.text.match(/!/g)||[]).length,3)/3;
+  f.text_hook_phrase=HOOK_PHRASES.some(p=>low.includes(p))?1:0;f.text_punchline=PUNCHLINE_MARKERS.some(p=>low.includes(p))?1:0;
   f.text_tfidf=c.tokens.reduce((s,t)=>s+(corpus.idf[t]||corpus.meanIdf),0)/Math.max(c.tokens.length,1);
   let rep=0;for(let k=0;k<c.tokens.length-2;k++)if(corpus.callbacks.has(c.tokens[k]+"|"+c.tokens[k+1]+"|"+c.tokens[k+2]))rep++;f.text_repetition=Math.min(rep/Math.max(c.tokens.length,1),1);
-  const firstS=c.sentences[0].text,lastS=c.sentences[c.sentences.length-1].text;
-  const firstLow=firstS.toLowerCase();
+  const firstS=c.sentences[0].text,lastS=c.sentences[c.sentences.length-1].text;const firstLow=firstS.toLowerCase();
   f.text_hook_start=HOOK_PHRASES.some(p=>firstLow.includes(p))||firstS.includes("?")?1:(tokenize(firstS).some(t=>(AROUSAL[t]||0)>=3)?0.6:0);
-  const lastLow=lastS.toLowerCase();
-  f.text_payoff_end=PUNCHLINE_MARKERS.some(p=>lastLow.includes(p))||/!\s*$/.test(lastS.trim())?1:0;
-  f.struct_self_contained=CONTEXT_STARTERS.has(c.tokens[0]||"")?0:1;
-  f.struct_complete_ending=/[.!?]\s*$/.test(c.text.trim())?1:0;
+  const lastLow=lastS.toLowerCase();f.text_payoff_end=PUNCHLINE_MARKERS.some(p=>lastLow.includes(p))||/!\s*$/.test(lastS.trim())?1:0;
+  f.struct_self_contained=CONTEXT_STARTERS.has(c.tokens[0]||"")?0:1;f.struct_complete_ending=/[.!?]\s*$/.test(c.text.trim())?1:0;
   f.struct_speech_density=Math.min(c.tokens.length/Math.max(c.duration,1)/3,1);
   const rp=c.start/Math.max(totalDur,1);f.struct_position=(rp<0.12||rp>0.82)?0.8:0;
-  /* Prefer raw regions a bit longer than ideal so we can crop filler */
-  const prefer=ideal*1.25;const sigma=Math.max(ideal*0.5,12);
-  f.duration_fit=Math.exp(-((c.duration-prefer)**2)/(2*sigma*sigma));
+  const prefer=ideal*1.25;const sigma=Math.max(ideal*0.5,12);f.duration_fit=Math.exp(-((c.duration-prefer)**2)/(2*sigma*sigma));
   if(ae&&ae.length&&astats){const i0=Math.max(0,Math.floor(c.start)),i1=Math.min(ae.length-1,Math.floor(c.end));const sl=ae.slice(i0,i1+1);
     if(sl.length){const mean=sl.reduce((a,b)=>a+b,0)/sl.length,peak=arrMax(sl);f.audio_energy_mean=mean;f.audio_energy_peak=peak;
       let maxZ=0;for(const x of sl){const z=(x-astats.mean)/astats.std;if(z>maxZ)maxZ=z;}f.audio_burst=Math.min(Math.max(maxZ,0)/3,1);
       let pay=0;const quiet=astats.mean*0.5,loud=astats.mean*1.4;for(let k=1;k<sl.length;k++)if(sl[k-1]<quiet&&sl[k]>loud)pay++;f.audio_payoff=Math.min(pay/2,1);}
     else{f.audio_energy_mean=f.audio_energy_peak=f.audio_burst=f.audio_payoff=0;}}
-  else{f.audio_energy_mean=f.audio_energy_peak=f.audio_burst=f.audio_payoff=0;}
-  return f;}
+  else{f.audio_energy_mean=f.audio_energy_peak=f.audio_burst=f.audio_payoff=0;}return f;}
 function scoreAll(cands,corpus,totalDur,ae,ideal,astats){if(!cands.length)return[];const fns=Object.keys(WEIGHTS);for(const c of cands)c.rawF=extractFeatures(c,corpus,totalDur,ae,ideal,astats);for(const fn of fns){const vals=cands.map(c=>c.rawF[fn]||0),lo=arrMin(vals),hi=arrMax(vals);for(const c of cands){c.normF=c.normF||{};c.normF[fn]=hi>lo?((c.rawF[fn]||0)-lo)/(hi-lo):0;}}for(const c of cands){c.score=fns.reduce((s,fn)=>s+WEIGHTS[fn]*(c.normF[fn]||0),0);c.reasons=fns.filter(fn=>FEATURE_LABELS[fn]).map(fn=>({fn,v:WEIGHTS[fn]*(c.normF[fn]||0)})).sort((a,b)=>b.v-a.v).slice(0,3).filter(x=>x.v>0.15).map(x=>FEATURE_LABELS[x.fn]);}return cands.sort((a,b)=>b.score-a.score);}
 function jaccard(a,b){let inter=0;for(const t of a)if(b.has(t))inter++;const uni=a.size+b.size-inter;return uni?inter/uni:0;}
-/* Always pick the single best non-overlapping moment (count forced to 1) */
 function selectTop(scored,n){if(!scored.length)return[];return[scored[0]];}
-
-function computeSentenceScores(sentences,corpus,ae,astats){
-  const raw=sentences.map(s=>{
-    const low=s.text.toLowerCase();const toks=tokenize(s.text);let sc=0;
-    sc+=toks.reduce((a,t)=>a+(AROUSAL[t]||0),0)/Math.max(toks.length,1)*1.6;
-    if(low.includes("?"))sc+=0.8;
-    sc+=Math.min((s.text.match(/!/g)||[]).length,3)/3*0.9;
-    if(HOOK_PHRASES.some(p=>low.includes(p)))sc+=1.8;
-    if(PUNCHLINE_MARKERS.some(p=>low.includes(p)))sc+=1.0;
-    sc+=toks.reduce((a,t)=>a+(corpus.idf[t]||corpus.meanIdf),0)/Math.max(toks.length,1)*0.5;
-    if(ae&&ae.length&&astats){const i0=Math.max(0,Math.floor(s.start)),i1=Math.min(ae.length-1,Math.floor(s.end));const sl=ae.slice(i0,i1+1);
-      if(sl.length){const mean=sl.reduce((a,b)=>a+b,0)/sl.length,peak=arrMax(sl);sc+=mean*1.0+peak*0.6;
-        let maxZ=0;for(const x of sl){const z=(x-astats.mean)/astats.std;if(z>maxZ)maxZ=z;}sc+=Math.min(Math.max(maxZ,0)/3,1)*1.2;}}
-    const firstTok=toks[0]||"";if(CONTEXT_STARTERS.has(firstTok))sc*=0.7;
-    const wc=s.text.split(/\s+/).filter(Boolean).length;if(wc>=3&&wc<=22)sc+=0.3;
-    if(/[.!?]\s*$/.test(s.text.trim()))sc+=0.15;
-    return sc;});
-  const lo=arrMin(raw),hi=arrMax(raw);
-  return raw.map(v=>hi>lo?(v-lo)/(hi-lo):0.5);}
-
-/* Drop weak / off-topic interior lines until near targetDur */
-function compressRegion(region,sentences,sentScore,targetDur,minFloor){
-  const lo=region.sentLo,hi=region.sentHi;
-  if(hi<=lo)return[{sentLo:lo,sentHi:lo,cs:sentences[lo].start,ce:sentences[lo].end}];
-  const keep=new Set();for(let i=lo;i<=hi;i++)keep.add(i);
-  function totalDur(){let d=0;for(const i of keep)d+=Math.max(sentences[i].end-sentences[i].start,0);return d;}
-  const floorDur=Math.max(minFloor||targetDur*0.875,Math.min(targetDur*0.7,targetDur-20));
-  let guard=0;
-  while(totalDur()>targetDur*1.02&&keep.size>1&&guard++<600){
-    const arr=[...keep].sort((a,b)=>a-b);
-    let worstIdx=-1,worstScore=Infinity;
-    if(arr.length>2){
-      for(let k=1;k<arr.length-1;k++){const i=arr[k];const sc=sentScore[i]||0;if(sc<worstScore){worstScore=sc;worstIdx=i;}}
-    }
-    if(worstIdx<0){
-      const first=arr[0],last=arr[arr.length-1];
-      worstIdx=((sentScore[last]||0)<=(sentScore[first]||0)+0.05)?last:first;
-    }
-    const dropDur=Math.max(sentences[worstIdx].end-sentences[worstIdx].start,0);
-    if(totalDur()-dropDur<floorDur&&totalDur()<=targetDur*1.15)break;
-    keep.delete(worstIdx);
-  }
-  const arr=[...keep].sort((a,b)=>a-b);
-  if(!arr.length)return[{sentLo:lo,sentHi:lo,cs:sentences[lo].start,ce:Math.min(sentences[lo].end,sentences[lo].start+targetDur)}];
-  const cuts=[];let runStart=arr[0];
-  for(let k=0;k<arr.length;k++){
-    const atEnd=k+1>=arr.length||arr[k+1]!==arr[k]+1;
-    if(atEnd){const runEnd=arr[k];cuts.push({sentLo:runStart,sentHi:runEnd,cs:sentences[runStart].start,ce:sentences[runEnd].end});if(k+1<arr.length)runStart=arr[k+1];}
-  }
-  return cuts;}
-function refineCutBounds(cut){const ae=S.audioEnergy;let cs=cut.cs,ce=cut.ce;
-  if(ae&&ae.length){let g=0;while(g++<6&&ce-cs>2){const i=Math.floor(cs);if(i>=0&&i<ae.length&&ae[i]<0.04)cs+=0.25;else break;}
-    g=0;while(g++<6&&ce-cs>2){const i=Math.floor(ce);if(i>=0&&i<ae.length&&ae[i]<0.04)ce-=0.25;else break;}}
-  cs=Math.max(0,cs-0.08);
-  return{cs,ce};}
+function computeSentenceScores(sentences,corpus,ae,astats){const raw=sentences.map(s=>{const low=s.text.toLowerCase();const toks=tokenize(s.text);let sc=0;sc+=toks.reduce((a,t)=>a+(AROUSAL[t]||0),0)/Math.max(toks.length,1)*1.6;if(low.includes("?"))sc+=0.8;sc+=Math.min((s.text.match(/!/g)||[]).length,3)/3*0.9;if(HOOK_PHRASES.some(p=>low.includes(p)))sc+=1.8;if(PUNCHLINE_MARKERS.some(p=>low.includes(p)))sc+=1.0;sc+=toks.reduce((a,t)=>a+(corpus.idf[t]||corpus.meanIdf),0)/Math.max(toks.length,1)*0.5;if(ae&&ae.length&&astats){const i0=Math.max(0,Math.floor(s.start)),i1=Math.min(ae.length-1,Math.floor(s.end));const sl=ae.slice(i0,i1+1);if(sl.length){const mean=sl.reduce((a,b)=>a+b,0)/sl.length,peak=arrMax(sl);sc+=mean*1.0+peak*0.6;let maxZ=0;for(const x of sl){const z=(x-astats.mean)/astats.std;if(z>maxZ)maxZ=z;}sc+=Math.min(Math.max(maxZ,0)/3,1)*1.2;}}const firstTok=toks[0]||"";if(CONTEXT_STARTERS.has(firstTok))sc*=0.7;const wc=s.text.split(/\s+/).filter(Boolean).length;if(wc>=3&&wc<=22)sc+=0.3;if(/[.!?]\s*$/.test(s.text.trim()))sc+=0.15;return sc;});const lo=arrMin(raw),hi=arrMax(raw);return raw.map(v=>hi>lo?(v-lo)/(hi-lo):0.5);}
+function compressRegion(region,sentences,sentScore,targetDur,minFloor){const lo=region.sentLo,hi=region.sentHi;if(hi<=lo)return[{sentLo:lo,sentHi:lo,cs:sentences[lo].start,ce:sentences[lo].end}];const keep=new Set();for(let i=lo;i<=hi;i++)keep.add(i);function totalDur(){let d=0;for(const i of keep)d+=Math.max(sentences[i].end-sentences[i].start,0);return d;}const floorDur=Math.max(minFloor||targetDur*0.875,Math.min(targetDur*0.7,targetDur-20));let guard=0;while(totalDur()>targetDur*1.02&&keep.size>1&&guard++<600){const arr=[...keep].sort((a,b)=>a-b);let worstIdx=-1,worstScore=Infinity;if(arr.length>2){for(let k=1;k<arr.length-1;k++){const i=arr[k];const sc=sentScore[i]||0;if(sc<worstScore){worstScore=sc;worstIdx=i;}}}if(worstIdx<0){const first=arr[0],last=arr[arr.length-1];worstIdx=((sentScore[last]||0)<=(sentScore[first]||0)+0.05)?last:first;}const dropDur=Math.max(sentences[worstIdx].end-sentences[worstIdx].start,0);if(totalDur()-dropDur<floorDur&&totalDur()<=targetDur*1.15)break;keep.delete(worstIdx);}const arr=[...keep].sort((a,b)=>a-b);if(!arr.length)return[{sentLo:lo,sentHi:lo,cs:sentences[lo].start,ce:Math.min(sentences[lo].end,sentences[lo].start+targetDur)}];const cuts=[];let runStart=arr[0];for(let k=0;k<arr.length;k++){const atEnd=k+1>=arr.length||arr[k+1]!==arr[k]+1;if(atEnd){const runEnd=arr[k];cuts.push({sentLo:runStart,sentHi:runEnd,cs:sentences[runStart].start,ce:sentences[runEnd].end});if(k+1<arr.length)runStart=arr[k+1];}}return cuts;}
+function refineCutBounds(cut){const ae=S.audioEnergy;let cs=cut.cs,ce=cut.ce;if(ae&&ae.length){let g=0;while(g++<6&&ce-cs>2){const i=Math.floor(cs);if(i>=0&&i<ae.length&&ae[i]<0.04)cs+=0.25;else break;}g=0;while(g++<6&&ce-cs>2){const i=Math.floor(ce);if(i>=0&&i<ae.length&&ae[i]<0.04)ce-=0.25;else break;}}cs=Math.max(0,cs-0.08);return{cs,ce};}
 function cutDurOf(cuts){return(cuts||[]).reduce((n,c)=>n+Math.max(c.ce-c.cs,0),0);}
 function avgCutScore(cuts,sentScore){if(!cuts||!cuts.length)return 0;let s=0,n=0;for(const c of cuts){for(let i=c.sentLo;i<=c.sentHi;i++){s+=sentScore[i]||0;n++;}}return n?s/n:0;}
-
-/* Hard-trim cuts from the end until duration <= maxS */
-function hardTrimCuts(cuts,maxS){
-  if(!cuts||!cuts.length)return cuts||[];
-  let d=cutDurOf(cuts);
-  if(d<=maxS)return cuts;
-  let need=d-maxS;
-  for(let i=cuts.length-1;i>=0&&need>0.01;i--){
-    const c=cuts[i];const room=Math.max(0,(c.ce-c.cs)-0.45);
-    const take=Math.min(room,need);c.ce-=take;need-=take;
-  }
-  return cuts.filter(c=>c.ce-c.cs>=0.4);
-}
-
-/* Build jump-cut timeline for ONE region, aiming for ideal within [minS,maxS] */
-function finalizeRegionCuts(region,sentences,sentScore,ideal,minS,maxS){
-  const rawCuts=compressRegion(region,sentences,sentScore,ideal,minS);
-  let cuts=rawCuts.map(c=>{const rb=refineCutBounds(c);return{cs:rb.cs,ce:rb.ce,sentLo:c.sentLo,sentHi:c.sentHi};})
-    .filter(c=>c.ce-c.cs>=0.4);
-  cuts.sort((a,b)=>a.cs-b.cs);
-  const merged=[];
-  for(const c of cuts){
-    const last=merged[merged.length-1];
-    if(last&&c.cs-last.ce<0.2){last.ce=Math.max(last.ce,c.ce);last.sentHi=c.sentHi;}
-    else merged.push({cs:c.cs,ce:c.ce,sentLo:c.sentLo,sentHi:c.sentHi});
-  }
-  /* Drop weakest sub-cuts if still over max */
-  while(cutDurOf(merged)>maxS&&merged.length>1){
-    let wi=0,ws=Infinity;
-    for(let i=0;i<merged.length;i++){
-      if(i===0&&merged.length>2)continue;
-      const sc=avgCutScore([merged[i]],sentScore);
-      if(sc<ws){ws=sc;wi=i;}
-    }
-    merged.splice(wi,1);
-  }
-  cuts=hardTrimCuts(merged,maxS);
-  region.cuts=cuts;
-  region.cutDuration=cutDurOf(cuts);
-  region._avgScore=avgCutScore(cuts,sentScore);
-  return region;
-}
-
-/*
- * Pick THE single best clip near target length.
- * Acceptable window e.g. 1:45–2:20 for a 2:00 target.
- * If the top candidate won't fit the window after cropping, try the next best.
- */
-function pickBestSingleClip(scored,sentences,sentScore,targetS){
-  const{ideal,minS,maxS}=durationWindow(targetS);
-  if(!scored.length)return[];
-  const pool=scored.slice(0,50);
-  let fallback=null;let fallbackDist=Infinity;
-
-  for(const cand of pool){
-    /* work on a shallow copy of cut fields so failed tries don't stick */
-    const trial={...cand,cuts:null,cutDuration:0};
-    finalizeRegionCuts(trial,sentences,sentScore,ideal,minS,maxS);
-    const d=trial.cutDuration||0;
-    if(d>=minS&&d<=maxS&&trial.cuts&&trial.cuts.length){
-      cand.cuts=trial.cuts;cand.cutDuration=trial.cutDuration;cand._avgScore=trial._avgScore;
-      return[cand];
-    }
-    if(trial.cuts&&trial.cuts.length){
-      /* track closest-to-ideal as fallback */
-      const dist=Math.abs(d-ideal)+(d>maxS?(d-maxS)*2:0)+(d<minS?(minS-d)*1.5:0);
-      if(dist<fallbackDist){fallbackDist=dist;fallback=trial;fallback._src=cand;}
-    }
-  }
-
-  if(fallback&&fallback._src){
-    /* Force into window with hard trim; if still short, keep what we have */
-    let cuts=hardTrimCuts(fallback.cuts.map(c=>({...c})),maxS);
-    /* If under minS, don't invent content — accept shorter only as last resort */
-    const d=cutDurOf(cuts);
-    if(d>maxS)cuts=hardTrimCuts(cuts,maxS);
-    const src=fallback._src;
-    src.cuts=cuts;src.cutDuration=cutDurOf(cuts);src._avgScore=avgCutScore(cuts,sentScore);
-    /* Reject if still wildly over max (shouldn't happen after hard trim) */
-    if(src.cutDuration>maxS+0.5){
-      src.cuts=hardTrimCuts(src.cuts,maxS);
-      src.cutDuration=cutDurOf(src.cuts);
-    }
-    return src.cuts&&src.cuts.length?[src]:[];
-  }
-  return[];
-}
-
-/* Kept for API compat — routes to single-clip picker */
-function buildMomentCuts(regions,sentences,sentScore,totalTargetS){
-  const{ideal,minS,maxS}=durationWindow(totalTargetS);
-  for(const r of regions)finalizeRegionCuts(r,sentences,sentScore,ideal,minS,maxS);
-  return regions;
-}
-
-/* ================= AUDIO ANALYSIS ================= */
+function hardTrimCuts(cuts,maxS){if(!cuts||!cuts.length)return cuts||[];let d=cutDurOf(cuts);if(d<=maxS)return cuts;let need=d-maxS;for(let i=cuts.length-1;i>=0&&need>0.01;i--){const c=cuts[i];const room=Math.max(0,(c.ce-c.cs)-0.45);const take=Math.min(room,need);c.ce-=take;need-=take;}return cuts.filter(c=>c.ce-c.cs>=0.4);}
+function finalizeRegionCuts(region,sentences,sentScore,ideal,minS,maxS){const rawCuts=compressRegion(region,sentences,sentScore,ideal,minS);let cuts=rawCuts.map(c=>{const rb=refineCutBounds(c);return{cs:rb.cs,ce:rb.ce,sentLo:c.sentLo,sentHi:c.sentHi};}).filter(c=>c.ce-c.cs>=0.4);cuts.sort((a,b)=>a.cs-b.cs);const merged=[];for(const c of cuts){const last=merged[merged.length-1];if(last&&c.cs-last.ce<0.2){last.ce=Math.max(last.ce,c.ce);last.sentHi=c.sentHi;}else merged.push({cs:c.cs,ce:c.ce,sentLo:c.sentLo,sentHi:c.sentHi});}while(cutDurOf(merged)>maxS&&merged.length>1){let wi=0,ws=Infinity;for(let i=0;i<merged.length;i++){if(i===0&&merged.length>2)continue;const sc=avgCutScore([merged[i]],sentScore);if(sc<ws){ws=sc;wi=i;}}merged.splice(wi,1);}cuts=hardTrimCuts(merged,maxS);region.cuts=cuts;region.cutDuration=cutDurOf(cuts);region._avgScore=avgCutScore(cuts,sentScore);return region;}
+function pickBestSingleClip(scored,sentences,sentScore,targetS){const{ideal,minS,maxS}=durationWindow(targetS);if(!scored.length)return[];const pool=scored.slice(0,50);let fallback=null;let fallbackDist=Infinity;for(const cand of pool){const trial={...cand,cuts:null,cutDuration:0};finalizeRegionCuts(trial,sentences,sentScore,ideal,minS,maxS);const d=trial.cutDuration||0;if(d>=minS&&d<=maxS&&trial.cuts&&trial.cuts.length){cand.cuts=trial.cuts;cand.cutDuration=trial.cutDuration;cand._avgScore=trial._avgScore;return[cand];}if(trial.cuts&&trial.cuts.length){const dist=Math.abs(d-ideal)+(d>maxS?(d-maxS)*2:0)+(d<minS?(minS-d)*1.5:0);if(dist<fallbackDist){fallbackDist=dist;fallback=trial;fallback._src=cand;}}}if(fallback&&fallback._src){let cuts=hardTrimCuts(fallback.cuts.map(c=>({...c})),maxS);if(cutDurOf(cuts)>maxS)cuts=hardTrimCuts(cuts,maxS);const src=fallback._src;src.cuts=cuts;src.cutDuration=cutDurOf(cuts);src._avgScore=avgCutScore(cuts,sentScore);if(src.cutDuration>maxS+0.5){src.cuts=hardTrimCuts(src.cuts,maxS);src.cutDuration=cutDurOf(src.cuts);}return src.cuts&&src.cuts.length?[src]:[];}return[];}
+function buildMomentCuts(regions,sentences,sentScore,totalTargetS){const{ideal,minS,maxS}=durationWindow(totalTargetS);for(const r of regions)finalizeRegionCuts(r,sentences,sentScore,ideal,minS,maxS);return regions;}
 async function analyzeAudio(file){try{const ab=await file.arrayBuffer();const ctx=new(window.AudioContext||window.webkitAudioContext)();const audio=await ctx.decodeAudioData(ab);const data=audio.getChannelData(0),sr=audio.sampleRate,dur=audio.duration;const energy=[];for(let i=0;i<Math.ceil(dur);i++){const from=i*sr,to=Math.min(data.length,(i+1)*sr);let sum=0;for(let j=from;j<to;j++)sum+=data[j]*data[j];energy.push(Math.sqrt(sum/Math.max(to-from,1)));}const eMax=Math.max(arrMax(energy),0.0001);await ctx.close();return energy.map(v=>v/eMax);}catch(e){console.warn("Audio analysis failed:",e);return null;}}
