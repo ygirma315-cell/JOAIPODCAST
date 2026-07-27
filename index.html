@@ -66,6 +66,9 @@ code { font-family:Menlo,Consolas,monospace; font-size:.9em; background:var(--so
 .info-grid .v { font-weight:600; margin-top:2px; }
 .opt-group { margin-top:24px; }
 .opt-label { display:block; font-weight:600; margin-bottom:8px; }
+.yt-row { display:flex; gap:8px; flex-wrap:wrap; }
+.yt-row input { flex:1; min-width:220px; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius); font:inherit; transition:border-color .18s ease, box-shadow .18s ease; }
+.yt-row input:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(39,131,222,.15); }
 .seg-control { display:flex; flex-wrap:wrap; gap:8px; }
 .seg-control button { padding:10px 18px; min-height:44px; border-radius:var(--radius); border:1px solid var(--border); background:var(--canvas); font-size:15px; cursor:pointer; color:var(--text); transition:all .18s ease; }
 .seg-control button:hover { background:var(--soft); transform:translateY(-1px); }
@@ -173,7 +176,16 @@ li.st-active .st-ic { background:var(--blue); color:#fff; animation:spinIc 1.4s 
   <!-- STEP 2 -->
   <section class="card" id="panel-2" hidden>
     <h2>Add the transcript</h2>
-    <p class="muted">Upload a <code>.srt</code> or <code>.vtt</code> (timestamps used directly) or plain <code>.txt</code> (timestamps estimated). You can also paste text below.</p>
+    <p class="muted">Grab it straight from YouTube, upload a <code>.srt</code> / <code>.vtt</code> / <code>.txt</code>, or just paste the text.</p>
+    <div class="opt-group" style="margin-top:18px">
+      <label class="opt-label">🎥 From YouTube (via youtubetotranscript.com)</label>
+      <div class="yt-row">
+        <input type="text" id="yt-url" placeholder="Paste the YouTube link of this video…">
+        <button class="btn primary" id="yt-fetch">Fetch transcript</button>
+      </div>
+      <div id="yt-status" class="muted small" style="margin-top:8px"></div>
+    </div>
+    <div class="or-divider"><span>or upload a file</span></div>
     <div class="dropzone small-dz" id="tr-drop" tabindex="0" role="button">
       <div class="dz-title">Drop <b>.txt / .srt / .vtt</b> here or <span class="link">browse</span></div>
       <input type="file" id="tr-input" accept=".txt,.srt,.vtt,text/plain" hidden>
@@ -309,6 +321,37 @@ function parseTSTime(s){const m=s.match(/(\d+):(\d+):(\d+)[,\.](\d+)/);if(!m)ret
 function parseSRT(t){const out=[];for(const blk of t.trim().split(/\n\n+/)){const lines=blk.trim().split("\n");let tsL=null,tsI=-1;for(let i=0;i<lines.length;i++)if(lines[i].includes("-->")){tsL=lines[i];tsI=i;break;}if(!tsL)continue;const p=tsL.split("-->").map(s=>s.trim());const start=parseTSTime(p[0]),end=parseTSTime(p[1]);const txt=lines.slice(tsI+1).join(" ").replace(/<[^>]+>/g,"").trim();if(txt&&end>start)out.push({start,end,text:txt});}return out;}
 function alignTXT(text,dur){const sents=(text.match(/[^.!?]+[.!?]+/g)||[text]).map(s=>s.trim()).filter(Boolean);const words=text.split(/\s+/).filter(Boolean).length;const wps=Math.max(words/Math.max(dur,1),0.5);const out=[];let t=0;for(const s of sents){const w=s.split(/\s+/).filter(Boolean).length;const d=Math.max(w/wps,0.5);out.push({start:t,end:Math.min(t+d,dur),text:s});t+=d;}return out;}
 function handleTranscript(fname,text){showAlert("");const t=text.trim();if(t.length<10){showAlert("Transcript is too short.");return;}let sents=[];if(/-->/.test(t)){sents=t.startsWith("WEBVTT")?parseSRT(t.replace(/^WEBVTT[^\n]*\n/,"\n")):parseSRT(t);}else sents=alignTXT(t,S.videoDuration||3600);if(!sents.length){showAlert("Could not parse transcript. Check the format.");return;}S.sentences=sents;const wc=sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);const timed=/-->/.test(t);infoGrid("#tr-info",[["Format",timed?"SRT/VTT (timed)":"TXT (estimated)"],["Words",String(wc)],["Sentences",String(sents.length)],["Cover",fmtTime(sents[0].start)+" \u2013 "+fmtTime(sents[sents.length-1].end)]]);$("#to-step-3").disabled=false;}
+
+/* ---- YouTube transcript integration (youtubetotranscript.com) ---- */
+function ytId(input){const s=(input||"").trim();const m=s.match(/[?&]v=([\w-]{11})/)||s.match(/youtu\.be\/([\w-]{11})/)||s.match(/shorts\/([\w-]{11})/)||s.match(/embed\/([\w-]{11})/)||s.match(/transcript\?v=([\w-]{11})/);if(m)return m[1];if(/^[\w-]{11}$/.test(s))return s;return null;}
+async function fetchViaProxies(target){const proxies=[u=>"https://api.allorigins.win/raw?url="+encodeURIComponent(u),u=>"https://corsproxy.io/?url="+encodeURIComponent(u)];
+  for(const p of proxies){try{const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),20000);const res=await fetch(p(target),{signal:ctl.signal});clearTimeout(to);if(res.ok){const txt=await res.text();if(txt&&txt.length>500)return txt;}}catch(e){}}
+  return null;}
+function parseTranscriptHTML(html){const doc=new DOMParser().parseFromString(html,"text/html");
+  const nodes=Array.from(doc.querySelectorAll("[data-start]"));const segs=[];
+  for(const n of nodes){const st=parseFloat(n.getAttribute("data-start"));const tx=(n.textContent||"").replace(/\s+/g," ").trim();if(!isNaN(st)&&tx)segs.push({start:st,text:tx});}
+  if(segs.length>3){segs.sort((a,b)=>a.start-b.start);const out=segs.map((s,i)=>({start:s.start,end:i+1<segs.length?Math.max(segs[i+1].start,s.start+0.5):s.start+4,text:s.text}));return{sents:out};}
+  const cont=doc.querySelector("#transcript")||doc.querySelector(".transcript")||doc.querySelector("main")||doc.body;
+  const raw=cont?cont.textContent.replace(/\s+/g," ").trim():"";
+  if(raw.length>300)return{text:raw};
+  return null;}
+async function fetchYouTube(){const inp=$("#yt-url").value,st=$("#yt-status"),btn=$("#yt-fetch");
+  const id=ytId(inp);
+  if(!id){st.textContent="That doesn't look like a YouTube link. Paste the full video URL.";return;}
+  const target="https://youtubetotranscript.com/transcript?v="+id;
+  st.textContent="\u23f3 Fetching transcript for "+id+"\u2026";btn.disabled=true;
+  let html=null;
+  try{html=await fetchViaProxies(target);}catch(e){}
+  btn.disabled=false;
+  if(!html){st.innerHTML='Automatic fetch was blocked. <a class="link" href="'+target+'" target="_blank" rel="noopener">I opened the transcript page for you</a> \u2014 press \u201cCopy Transcript\u201d there, then paste it in the box below.';window.open(target,"_blank");return;}
+  const parsed=parseTranscriptHTML(html);
+  if(!parsed){st.innerHTML='No transcript found \u2014 the video may have captions disabled. <a class="link" href="'+target+'" target="_blank" rel="noopener">Check it here</a>.';return;}
+  if(parsed.sents){S.sentences=parsed.sents;
+    const wc=parsed.sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);
+    infoGrid("#tr-info",[["Source","YouTube (timed)"],["Words",String(wc)],["Sentences",String(parsed.sents.length)],["Cover",fmtTime(parsed.sents[0].start)+" \u2013 "+fmtTime(parsed.sents[parsed.sents.length-1].end)]]);
+    $("#to-step-3").disabled=false;
+    st.textContent="\u2713 Transcript loaded with real timestamps \u2014 you're good to go!";}
+  else{handleTranscript(null,parsed.text);st.textContent="\u2713 Transcript text loaded (timestamps estimated from speech rate).";}}
 
 /* ================= STEP 3: OPTIONS ================= */
 function initOpts(){buildSegCtrl("#opt-duration",[30,60,90,120,180],["30 s","1 min","1.5 min","2 min","3 min"],"target_s",60);buildSegCtrl("#opt-count",[3,5,7,10],["3","5","7","10"],"count",5);buildSegCtrl("#opt-aspect",["9:16","1:1","16:9"],["9:16 vertical","1:1 square","16:9 wide"],"aspect","9:16");buildSegCtrl("#opt-style",["bold","clean","mono"],["Bold (yellow)","Clean (white)","Mono"],"style","bold");}
@@ -547,6 +590,8 @@ function boot(){initOpts();goStep(1);
   bindDrop("#tr-drop","#tr-input",f=>{const r=new FileReader();r.onload=()=>handleTranscript(f.name,String(r.result));r.readAsText(f);});
   let tt=null;
   $("#tr-text").addEventListener("input",()=>{clearTimeout(tt);tt=setTimeout(()=>{const t=$("#tr-text").value;if(t.trim().length>20)handleTranscript(null,t);},700);});
+  $("#yt-fetch").addEventListener("click",fetchYouTube);
+  $("#yt-url").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();fetchYouTube();}});
   $("#to-step-2").addEventListener("click",()=>goStep(2));
   $("#to-step-3").addEventListener("click",()=>goStep(3));
   $$('[data-back]').forEach(b=>b.addEventListener("click",()=>goStep(Number(b.dataset.back))));
