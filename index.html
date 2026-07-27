@@ -36,6 +36,7 @@ code { font-family:Menlo,Consolas,monospace; font-size:.9em; background:var(--so
 .brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:18px; }
 .brand svg { animation:floaty 4s ease-in-out infinite; }
 .tagline { color:var(--text-2); font-size:14px; }
+.top-right { display:flex; align-items:center; gap:14px; }
 .foot { text-align:center; color:var(--text-2); font-size:14px; padding:24px 16px 32px; }
 .wrap { width:100%; max-width:1020px; margin:0 auto; padding:24px; flex:1; }
 .card { background:var(--canvas); border:1px solid var(--border); border-radius:var(--radius-lg); padding:32px; margin-top:16px; box-shadow:var(--shadow); animation:fadeUp .45s cubic-bezier(.22,.9,.36,1) both; }
@@ -132,11 +133,83 @@ li.st-active .st-ic { background:var(--blue); color:#fff; animation:spinIc 1.4s 
 .color-item input[type=color] { width:46px; height:32px; padding:2px; border:1px solid var(--border); border-radius:6px; cursor:pointer; }
 #export-box { display:none; margin-top:18px; padding:18px; background:var(--soft); border:1px solid var(--border); border-radius:var(--radius-lg); animation:popIn .3s ease both; }
 #export-box h3 { margin:0 0 12px; font-size:16px; }
+/* ================= LOGIN GATE ================= */
+@keyframes gateGrad { 0% { background-position:0% 50%; } 50% { background-position:100% 50%; } 100% { background-position:0% 50%; } }
+@keyframes gateBlob { 0%,100% { transform:translate(0,0) scale(1); } 33% { transform:translate(50px,-60px) scale(1.18); } 66% { transform:translate(-40px,40px) scale(.9); } }
+@keyframes gateCard { from { opacity:0; transform:translateY(34px) scale(.95); } to { opacity:1; transform:none; } }
+@keyframes gateShake { 10%,90% { transform:translateX(-2px); } 20%,80% { transform:translateX(4px); } 30%,50%,70% { transform:translateX(-8px); } 40%,60% { transform:translateX(8px); } }
+@keyframes gateSheen { 0% { left:-70%; } 100% { left:130%; } }
+#login-gate { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:20px; overflow:hidden; background:linear-gradient(-45deg,#0E1B2C,#16345C,#1F5FA8,#12294A); background-size:400% 400%; animation:gateGrad 14s ease infinite; transition:opacity .6s ease; }
+#login-gate.fade-out { opacity:0; pointer-events:none; }
+#login-gate.hidden { display:none; }
+#login-gate .blob { position:absolute; border-radius:50%; filter:blur(70px); opacity:.45; animation:gateBlob 16s ease-in-out infinite; }
+#login-gate .b1 { width:380px; height:380px; background:#2783DE; top:-90px; left:-80px; }
+#login-gate .b2 { width:300px; height:300px; background:#7C5CFF; bottom:-70px; right:-60px; animation-delay:-5s; }
+#login-gate .b3 { width:240px; height:240px; background:#35C08E; bottom:20%; left:12%; animation-delay:-9s; }
+.login-card { position:relative; width:100%; max-width:430px; background:rgba(255,255,255,.09); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,.22); border-radius:22px; padding:38px 34px 30px; color:#fff; text-align:center; box-shadow:0 24px 70px rgba(0,0,0,.45); animation:gateCard .65s cubic-bezier(.22,.9,.36,1) both; }
+.login-card.shake { animation:gateShake .5s ease; }
+.login-logo { display:flex; align-items:center; justify-content:center; gap:10px; font-weight:800; font-size:20px; letter-spacing:-.01em; }
+.login-logo svg { animation:floaty 4s ease-in-out infinite; }
+.login-card h1 { margin:18px 0 6px; font-size:28px; letter-spacing:-.02em; background:linear-gradient(90deg,#FFFFFF,#BFDCFF,#FFFFFF); background-size:200% 100%; -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; animation:shimmer 5s linear infinite; }
+.login-sub { margin:0 0 20px; color:rgba(255,255,255,.75); font-size:14.5px; }
+.plans { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:22px; }
+.plan { border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:14px 10px; background:rgba(255,255,255,.05); animation:popIn .5s ease both; }
+.plan.free { border-color:rgba(120,255,190,.55); background:rgba(70,161,113,.16); box-shadow:0 0 22px rgba(70,161,113,.25); animation-delay:.12s; }
+.plan b { display:block; font-size:13.5px; }
+.plan .price { display:block; font-size:20px; font-weight:900; margin-top:4px; }
+.plan .price small { font-size:12px; font-weight:600; opacity:.75; }
+.plan.free .price { color:#7CF5B8; }
+.plan em { display:block; font-style:normal; font-size:11.5px; color:rgba(255,255,255,.65); margin-top:3px; }
+#login-form { display:flex; flex-direction:column; gap:12px; }
+#login-form input { width:100%; padding:13px 15px; border-radius:12px; border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.1); color:#fff; font:inherit; font-size:15px; transition:all .2s ease; }
+#login-form input::placeholder { color:rgba(255,255,255,.55); }
+#login-form input:focus { outline:none; border-color:#5AA7EC; background:rgba(255,255,255,.16); box-shadow:0 0 0 4px rgba(90,167,236,.25); }
+.pw-wrap { position:relative; }
+.pw-wrap input { padding-right:48px; }
+#pw-eye { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:transparent; border:0; color:rgba(255,255,255,.7); font-size:17px; cursor:pointer; padding:8px; border-radius:8px; }
+#pw-eye:hover { color:#fff; background:rgba(255,255,255,.12); }
+.login-btn { position:relative; overflow:hidden; margin-top:4px; padding:14px; border:0; border-radius:12px; background:linear-gradient(135deg,#2783DE,#5AA7EC); color:#fff; font-size:16px; font-weight:800; cursor:pointer; transition:all .2s ease; box-shadow:0 8px 24px rgba(39,131,222,.45); }
+.login-btn:hover { transform:translateY(-2px); box-shadow:0 12px 32px rgba(39,131,222,.6); }
+.login-btn::after { content:""; position:absolute; top:0; bottom:0; left:-70%; width:40%; background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent); transform:skewX(-20deg); animation:gateSheen 2.8s ease infinite; }
+#login-err { min-height:18px; font-size:13px; color:#FFB3AB; font-weight:600; }
+.login-foot { margin:14px 0 0; font-size:12.5px; color:rgba(255,255,255,.55); }
+@media (max-width:480px) { .plans { grid-template-columns:1fr; } .login-card { padding:28px 22px 24px; } }
 @media (max-width:760px) { .wrap { padding:16px; } .card { padding:20px; } .topbar { padding:12px 16px; } .tagline { display:none; } .result-layout { grid-template-columns:1fr; } }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
 </style>
 </head>
 <body>
+<!-- ===== MEMBERS-ONLY LOGIN GATE ===== -->
+<div id="login-gate">
+  <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+  <div class="login-card" id="login-card">
+    <div class="login-logo">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+        <rect x="2" y="5" width="14" height="14" rx="3" stroke="#5AA7EC" stroke-width="2"/>
+        <path d="M16 10.5L22 7V17L16 13.5Z" fill="#5AA7EC"/>
+        <path d="M8 9.5L12.5 12L8 14.5Z" fill="#5AA7EC"/>
+      </svg>
+      <span>Viral Short</span>
+    </div>
+    <h1>Members only ✨</h1>
+    <p class="login-sub">Viral Short is a <b>paid subscription</b> app — but it's <b>100% FREE for Friendship members</b>.</p>
+    <div class="plans">
+      <div class="plan"><b>💳 Pro plan</b><span class="price">$9.99<small>/mo</small></span><em>public access — coming soon</em></div>
+      <div class="plan free"><b>🤝 Friendship member</b><span class="price">FREE</span><em>sign in below</em></div>
+    </div>
+    <form id="login-form" autocomplete="off">
+      <input id="login-user" type="text" placeholder="Username" autocomplete="username">
+      <div class="pw-wrap">
+        <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
+        <button type="button" id="pw-eye" title="Show / hide password">👁</button>
+      </div>
+      <button class="login-btn" type="submit">Unlock Viral Short →</button>
+      <div id="login-err"></div>
+    </form>
+    <p class="login-foot">Friendship members received their login from Jo personally 💙</p>
+  </div>
+</div>
+
 <header class="topbar">
   <div class="brand">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -146,7 +219,10 @@ li.st-active .st-ic { background:var(--blue); color:#fff; animation:spinIc 1.4s 
     </svg>
     <span>Viral Short</span>
   </div>
-  <div class="tagline">Browser-native · smart heuristic scoring · no cloud, no install</div>
+  <div class="top-right">
+    <div class="tagline">Browser-native · smart heuristic scoring · no cloud, no install</div>
+    <button class="btn mini ghost" id="logout" style="display:none">Log out</button>
+  </div>
 </header>
 
 <main class="wrap">
@@ -312,6 +388,21 @@ function goStep(n){for(let i=1;i<=5;i++)$("#panel-"+i).hidden=i!==n;$$(".step").
 function infoGrid(sel,cells){const el=$(sel);el.innerHTML="";cells.forEach(([k,v],i)=>{const d=document.createElement("div");d.className="cell";d.style.animationDelay=(i*60)+"ms";d.innerHTML='<div class="k"></div><div class="v"></div>';d.querySelector(".k").textContent=k;d.querySelector(".v").textContent=v;el.appendChild(d);});el.hidden=false;}
 function buildSegCtrl(sel,vals,labels,key,def){const box=$(sel);box.innerHTML="";vals.forEach((v,i)=>{const b=document.createElement("button");b.type="button";b.textContent=labels?labels[i]:String(v);if(String(def??S.opts[key])===String(v))b.classList.add("sel");b.addEventListener("click",()=>{S.opts[key]=v;box.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");});box.appendChild(b);});}
 function bindDrop(zone,inp,cb){const z=$(zone),i=$(inp);z.addEventListener("click",()=>i.click());z.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();i.click();}});i.addEventListener("change",()=>{if(i.files[0])cb(i.files[0]);});["dragover","dragenter"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.add("drag");}));["dragleave","drop"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.remove("drag");}));z.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)cb(f);});}
+
+/* ================= LOGIN GATE ================= */
+const GATE_K="am9mcmVpbmQ6ZnJlaW5k";
+function gateOK(u,p){try{return btoa(u.trim().toLowerCase()+":"+p)===GATE_K;}catch(e){return false;}}
+function unlockGate(){const g=$("#login-gate");g.classList.add("fade-out");setTimeout(()=>{g.classList.add("hidden");document.body.style.overflow="";},650);const lo=$("#logout");if(lo)lo.style.display="inline-flex";}
+function initGate(){const g=$("#login-gate");if(!g)return;
+  const lo=$("#logout");
+  if(lo)lo.addEventListener("click",()=>{localStorage.removeItem("vs_member");location.reload();});
+  if(localStorage.getItem("vs_member")==="1"){g.classList.add("hidden");if(lo)lo.style.display="inline-flex";return;}
+  document.body.style.overflow="hidden";
+  $("#pw-eye").addEventListener("click",()=>{const p=$("#login-pass");p.type=p.type==="password"?"text":"password";});
+  $("#login-form").addEventListener("submit",e=>{e.preventDefault();
+    const u=$("#login-user").value,p=$("#login-pass").value,err=$("#login-err"),card=$("#login-card");
+    if(gateOK(u,p)){err.textContent="";localStorage.setItem("vs_member","1");unlockGate();}
+    else{card.classList.remove("shake");void card.offsetWidth;card.classList.add("shake");err.textContent="Hmm, that's not it \u2014 access is for Friendship members only.";$("#login-pass").value="";}});}
 
 /* ================= STEP 1: VIDEO ================= */
 function handleVideo(file){if(!file)return;if(S.videoURL)URL.revokeObjectURL(S.videoURL);S.videoFile=file;S.videoURL=URL.createObjectURL(file);const v=document.createElement("video");v.preload="metadata";v.onloadedmetadata=()=>{S.videoDuration=v.duration;infoGrid("#video-info",[["File",file.name],["Size",fmtBytes(file.size)],["Duration",fmtTime(v.duration)],["Resolution",v.videoWidth+"\u00d7"+v.videoHeight]]);$("#to-step-2").disabled=false;};v.src=S.videoURL;}
@@ -536,83 +627,4 @@ function drawCaption(ctx,cw,ch,t,opt){if(!opt.captions)return;const sent=S.sente
       if(active)ctx.fillRect(x,y+sz*0.12,wdt,Math.max(3,sz*0.06));
       x+=wdt+space;}}
   ctx.restore();}
-function drawWM(ctx,cw,ch,text){if(!text)return;const sz=Math.max(18,Math.round(cw*0.025));ctx.save();ctx.font="800 "+sz+"px Arial";ctx.textAlign="right";ctx.textBaseline="top";ctx.lineWidth=3;ctx.strokeStyle="rgba(0,0,0,0.8)";ctx.strokeText(text,cw*0.95,ch*0.04);ctx.fillStyle="#fff";ctx.fillText(text,cw*0.95,ch*0.04);ctx.restore();ctx.textAlign="start";}
-async function exportClips(){if(S.exporting)return;
-  if(!window.MediaRecorder){showAlert("MediaRecorder not supported. Use Chrome or Edge.");return;}
-  stopPreview(true);
-  const segs=activeSegs();
-  if(!segs.length){showAlert("No segments selected.");return;}
-  S.exporting=true;S.cancelExport=false;
-  const box=$("#export-box");box.style.display="block";
-  $("#download").hidden=true;$("#cancel-export").hidden=false;$("#render-final").disabled=true;
-  const opt=S.opts;let cw=1080,ch=1920;if(opt.aspect==="1:1"){ch=1080;}else if(opt.aspect==="16:9"){cw=1280;ch=720;}
-  const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;
-  canvas.style.cssText="width:150px;max-width:40%;border-radius:8px;border:1px solid #E6E5E3;display:block;margin-top:10px;";
-  box.appendChild(canvas);
-  const ctx=canvas.getContext("2d"),stream=canvas.captureStream(30);
-  const player=$("#player");
-  try{const as=player.captureStream?player.captureStream():player.mozCaptureStream?player.mozCaptureStream():null;if(as)as.getAudioTracks().forEach(t=>stream.addTrack(t));}catch(e){}
-  const mime=["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"video/webm";
-  const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:8000000}),chunks=[];
-  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
-  rec.onstop=()=>{const blob=new Blob(chunks,{type:"video/webm"}),url=URL.createObjectURL(blob);
-    const dl=$("#download");dl.href=url;dl.download="viralshort_"+Date.now()+".webm";dl.textContent="\u2b07 Download WebM ("+(blob.size/1048576).toFixed(1)+" MB)";dl.hidden=false;
-    $("#cancel-export").hidden=true;$("#render-final").disabled=false;
-    $("#export-log").textContent="Export complete!";$("#export-bar").style.width="100%";
-    S.exporting=false;stream.getTracks().forEach(t=>t.stop());canvas.remove();};
-  rec.start(1000);
-  const total=segs.reduce((s,c)=>s+(c.ce-c.cs),0);let rendered=0;
-  for(const seg of segs){if(S.cancelExport)break;
-    player.currentTime=seg.cs;
-    await new Promise(r=>player.addEventListener("seeked",r,{once:true}));
-    player.muted=false;await player.play().catch(()=>{});
-    await new Promise(resolve=>{function frame(){
-      if(S.cancelExport){resolve();return;}
-      const cr=cropRect(player.videoWidth,player.videoHeight,cw,ch);
-      ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);
-      if(player.videoWidth)ctx.drawImage(player,cr.sx,cr.sy,cr.sw,cr.sh,0,0,cw,ch);
-      drawCaption(ctx,cw,ch,player.currentTime,opt);
-      if(opt.watermark&&opt.wmText)drawWM(ctx,cw,ch,opt.wmText);
-      if(opt.fades){const a=Math.max(0,Math.min(1,(player.currentTime-seg.cs)/0.3,(seg.ce-player.currentTime)/0.3));if(a<1){ctx.fillStyle="rgba(0,0,0,"+(1-Math.max(a,0)).toFixed(3)+")";ctx.fillRect(0,0,cw,ch);}}
-      const overall=(rendered+(player.currentTime-seg.cs))/total;
-      $("#export-bar").style.width=Math.min(99,overall*100).toFixed(0)+"%";
-      $("#export-log").textContent="Rendering "+(segs.indexOf(seg)+1)+"/"+segs.length+" \u2014 "+fmtTime(player.currentTime-seg.cs)+" of "+fmtTime(seg.ce-seg.cs)+"\u2026";
-      if(player.currentTime>=seg.ce||player.ended||player.paused){player.pause();resolve();return;}
-      requestAnimationFrame(frame);}
-      requestAnimationFrame(frame);});
-    rendered+=seg.ce-seg.cs;}
-  player.pause();rec.stop();
-  if(S.cancelExport){S.exporting=false;$("#export-log").textContent="Cancelled.";$("#render-final").disabled=false;$("#cancel-export").hidden=true;stream.getTracks().forEach(t=>t.stop());canvas.remove();}}
-
-/* ================= BOOT ================= */
-function boot(){initOpts();goStep(1);
-  bindDrop("#video-drop","#video-input",handleVideo);
-  bindDrop("#tr-drop","#tr-input",f=>{const r=new FileReader();r.onload=()=>handleTranscript(f.name,String(r.result));r.readAsText(f);});
-  let tt=null;
-  $("#tr-text").addEventListener("input",()=>{clearTimeout(tt);tt=setTimeout(()=>{const t=$("#tr-text").value;if(t.trim().length>20)handleTranscript(null,t);},700);});
-  $("#yt-fetch").addEventListener("click",fetchYouTube);
-  $("#yt-url").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();fetchYouTube();}});
-  $("#to-step-2").addEventListener("click",()=>goStep(2));
-  $("#to-step-3").addEventListener("click",()=>goStep(3));
-  $$('[data-back]').forEach(b=>b.addEventListener("click",()=>goStep(Number(b.dataset.back))));
-  $("#generate").addEventListener("click",generate);
-  $("#update-plan").addEventListener("click",updatePlan);
-  $("#render-final").addEventListener("click",exportClips);
-  $("#cancel-export").addEventListener("click",()=>{S.cancelExport=true;});
-  $("#start-over").addEventListener("click",()=>location.reload());
-  $("#preview-all").addEventListener("click",previewAll);
-  $("#stop-preview").addEventListener("click",()=>stopPreview(false));
-  $("#colors-reset").addEventListener("click",()=>{$("#opt-color-text").value="#FFFF00";$("#opt-color-hl").value="#FFFFFF";S.opts.colorText="#FFFF00";S.opts.colorHl="#FFFFFF";});
-  $("#opt-color-text").addEventListener("input",e=>S.opts.colorText=e.target.value);
-  $("#opt-color-hl").addEventListener("input",e=>S.opts.colorHl=e.target.value);
-  $("#opt-watermark").addEventListener("change",e=>{S.opts.watermark=e.target.checked;$("#wm-group").style.display=e.target.checked?"block":"none";});
-  $("#opt-wm-text").addEventListener("input",e=>S.opts.wmText=e.target.value);
-  $("#opt-captions").addEventListener("change",e=>S.opts.captions=e.target.checked);
-  $("#opt-fades").addEventListener("change",e=>S.opts.fades=e.target.checked);
-  const p=$("#player");
-  ["timeupdate","play","pause","seeked"].forEach(ev=>p.addEventListener(ev,()=>{updateOverlay();updatePlayhead();}));
-}
-boot();
-</script>
-</body>
-</html>
+function drawWM(ctx,cw,ch,text){if(!text)return;const sz=Math.max(18,Math.round(cw*0.025));ctx.save();ctx.font="800 "+sz+"px Arial";ctx.textAlign="right";ctx.textBaseline="top";ctx.lineWidth=3;ctx.strokeStyle="rgba(0,0,0,0.8)";ctx.strokeText(text,cw*0.95,ch*0.04);ctx.fillStyle="#fff";ctx.fillText(text,cw*0.95,ch*0.
