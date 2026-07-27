@@ -10,7 +10,10 @@ const FEATURE_LABELS={audio_energy_mean:"sustained energy",audio_energy_peak:"en
 const WEIGHTS={audio_energy_mean:1.0,audio_energy_peak:1.2,audio_burst:1.5,audio_payoff:1.3,text_arousal:1.6,text_question:0.8,text_exclamation:0.9,text_hook_phrase:1.8,text_punchline:1.0,text_tfidf:1.1,text_repetition:0.8,struct_position:0.5,struct_speech_density:0.9,struct_self_contained:1.0,struct_complete_ending:1.3,text_hook_start:2.0,text_payoff_end:1.2,duration_fit:1.0};
 
 /* ================= STATE ================= */
-const S={videoFile:null,videoURL:null,videoDuration:0,sentences:[],candidates:[],selected:[],dropped:new Set(),added:new Set(),audioEnergy:null,audioStats:null,opts:{target_s:60,count:5,aspect:"9:16",capTemplate:"bold",capPos:"bottom",capSize:"m",captions:true,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},exporting:false,cancelExport:false};
+const S={videoFile:null,videoURL:null,videoDuration:0,sentences:[],candidates:[],selected:[],dropped:new Set(),added:new Set(),audioEnergy:null,audioStats:null,
+  /* captions OFF by default — user picks a template to enable */
+  opts:{target_s:60,count:5,aspect:"9:16",capTemplate:"none",capPos:"bottom",capSize:"m",captions:false,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},
+  exporting:false,cancelExport:false};
 let ytReady=false,manualReady=false;
 
 /* ================= HELPERS ================= */
@@ -102,13 +105,15 @@ function initOpts(){
   buildSegCtrl("#opt-aspect",["9:16","1:1","16:9"],["\ud83d\udcf1 9:16 vertical","\u25fb 1:1 square","\ud83d\udda5 16:9 wide"],"aspect","9:16");
   buildSegCtrl("#opt-cappos",["bottom","middle","top"],["\u2b07 Bottom","\u25cf Middle","\u2b06 Top"],"capPos","bottom");
   buildSegCtrl("#opt-capsize",["s","m","l"],["Small","Medium","Large"],"capSize","m");
+  /* caption template cards — "none" is selected by default */
   $$("#tpl-grid .tpl-card").forEach(c=>c.addEventListener("click",()=>{
-    S.opts.capTemplate=c.dataset.tpl;
-    S.opts.captions=c.dataset.tpl!=="none";
+    const tpl=c.dataset.tpl;
+    S.opts.capTemplate=tpl;
+    S.opts.captions=tpl!=="none";
     $$("#tpl-grid .tpl-card").forEach(x=>x.classList.remove("sel"));
     c.classList.add("sel");
-    const cc=$("#cap-custom-group");if(cc)cc.style.display=(c.dataset.tpl==="bold"||c.dataset.tpl==="clean")?"block":"none";
-    const cs=$("#cap-settings");if(cs)cs.style.display=c.dataset.tpl==="none"?"none":"block";
+    const cs=$("#cap-settings");if(cs)cs.style.display=tpl==="none"?"none":"block";
+    const cc=$("#cap-custom-group");if(cc)cc.style.display=(tpl==="bold"||tpl==="clean")?"block":"none";
   }));
 }
 

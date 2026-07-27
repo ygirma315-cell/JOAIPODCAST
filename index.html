@@ -5,7 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=10">
+<link rel="stylesheet" href="styles.css?v=11">
+<style>
+/* Final player: show at its natural aspect ratio, centred, no black bars */
+#final-player {
+  display: block;
+  margin: 0 auto;
+  width: auto;
+  max-width: 100%;
+  max-height: 72vh;
+  border-radius: var(--radius-lg);
+  background: #000;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  animation: popIn .45s ease both;
+}
+/* hidden render player */
+#player { display:none; }
+/* stage percentage badge */
+.st-pct { margin-left:auto; font-size:12px; font-weight:700; color:var(--blue); min-width:34px; text-align:right; }
+</style>
 </head>
 <body>
 
@@ -136,16 +155,16 @@
 
     <div class="opt-section">
       <h3>💬 Captions</h3>
-      <p class="sec-sub">Word-by-word karaoke captions burned into the video. Pick “No captions” to turn them off.</p>
+      <p class="sec-sub">Word-by-word karaoke captions burned into the video. Off by default — pick a template to enable.</p>
       <div class="tpl-grid" id="tpl-grid">
-        <div class="tpl-card sel" data-tpl="bold"><div class="tpl-prev tp-bold">Viral</div><div class="tpl-name">🔥 Bold Pop</div></div>
+        <div class="tpl-card" data-tpl="bold"><div class="tpl-prev tp-bold">Viral</div><div class="tpl-name">🔥 Bold Pop</div></div>
         <div class="tpl-card" data-tpl="clean"><div class="tpl-prev tp-clean">Viral</div><div class="tpl-name">✨ Clean</div></div>
         <div class="tpl-card" data-tpl="neon"><div class="tpl-prev tp-neon">Viral</div><div class="tpl-name">💜 Neon Glow</div></div>
         <div class="tpl-card" data-tpl="boxed"><div class="tpl-prev tp-boxed"><span>Viral</span></div><div class="tpl-name">⬛ Boxed</div></div>
         <div class="tpl-card" data-tpl="mono"><div class="tpl-prev tp-mono">Viral</div><div class="tpl-name">⌨ Mono</div></div>
-        <div class="tpl-card" data-tpl="none"><div class="tpl-prev tp-none">🚫</div><div class="tpl-name">No captions</div></div>
+        <div class="tpl-card sel" data-tpl="none"><div class="tpl-prev tp-none">🚫</div><div class="tpl-name">No captions</div></div>
       </div>
-      <div id="cap-settings">
+      <div id="cap-settings" style="display:none">
         <div class="opt-group">
           <label class="opt-label">Position on screen</label>
           <div class="seg-control" id="opt-cappos"></div>
@@ -154,7 +173,7 @@
           <label class="opt-label">Caption size</label>
           <div class="seg-control" id="opt-capsize"></div>
         </div>
-        <div class="opt-group" id="cap-custom-group">
+        <div class="opt-group" id="cap-custom-group" style="display:none">
           <label class="opt-label">Custom colors (Bold Pop &amp; Clean)</label>
           <div class="color-row">
             <label class="color-item"><input type="color" id="opt-color-text" value="#FFFF00"> Text</label>
@@ -209,24 +228,27 @@
   <!-- STEP 5 -->
   <section class="card" id="panel-5" hidden>
     <h2>🎬 Your final edit</h2>
-    <video id="player" style="display:none" playsinline></video>
+    <!-- hidden scrubbing player used only during render -->
+    <video id="player" playsinline preload="auto" style="display:none;position:absolute;opacity:0;pointer-events:none"></video>
+
     <div id="render-box">
       <p class="muted" id="render-info"></p>
-      <!-- progress bar + live % counter -->
       <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
         <div class="bar big" style="flex:1;margin-top:0"><div class="bar-fill" id="export-bar"></div></div>
         <span id="export-pct" style="font-weight:700;font-size:17px;min-width:46px;text-align:right;color:var(--blue)">0%</span>
       </div>
       <p class="small" id="export-log" style="margin-top:8px"></p>
-      <p class="muted small">The video renders in real time — keep this tab open and visible 👀 (player is muted while rendering).</p>
+      <p class="muted small">The video renders in real time — keep this tab open and visible 👀 (muted while rendering, audio is captured into the output).</p>
       <div class="actions">
         <button class="btn danger mini" id="cancel-export">Cancel</button>
       </div>
     </div>
-    <div id="final-box" style="display:none">
-      <video id="final-player" controls playsinline></video>
-      <p class="final-info" id="final-info"></p>
-      <div class="actions">
+
+    <div id="final-box" style="display:none;text-align:center">
+      <!-- no poster, preload=none so no thumbnail frame shows -->
+      <video id="final-player" controls playsinline preload="none"></video>
+      <p class="final-info" id="final-info" style="text-align:left"></p>
+      <div class="actions" style="justify-content:center;flex-wrap:wrap">
         <a class="btn primary" id="download">⬇ Download video</a>
         <button class="btn" id="render-again">↻ Re-render</button>
         <button class="btn ghost" data-back="3">← Back to style</button>
@@ -238,7 +260,7 @@
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=10"></script>
-<script src="app-ui.js?v=10"></script>
+<script src="app-core.js?v=11"></script>
+<script src="app-ui.js?v=11"></script>
 </body>
 </html>
