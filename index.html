@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="styles.css?v=10">
 </head>
 <body>
 
@@ -212,9 +212,13 @@
     <video id="player" style="display:none" playsinline></video>
     <div id="render-box">
       <p class="muted" id="render-info"></p>
-      <div class="bar big"><div class="bar-fill" id="export-bar"></div></div>
-      <p class="small" id="export-log"></p>
-      <p class="muted small">The video renders in real time — a 2-minute edit takes about 2 minutes. Keep this tab open and visible 👀 (you'll hear the audio while it cuts).</p>
+      <!-- progress bar + live % counter -->
+      <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+        <div class="bar big" style="flex:1;margin-top:0"><div class="bar-fill" id="export-bar"></div></div>
+        <span id="export-pct" style="font-weight:700;font-size:17px;min-width:46px;text-align:right;color:var(--blue)">0%</span>
+      </div>
+      <p class="small" id="export-log" style="margin-top:8px"></p>
+      <p class="muted small">The video renders in real time — keep this tab open and visible 👀 (player is muted while rendering).</p>
       <div class="actions">
         <button class="btn danger mini" id="cancel-export">Cancel</button>
       </div>
@@ -234,7 +238,7 @@
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=9"></script>
-<script src="app-ui.js?v=9"></script>
+<script src="app-core.js?v=10"></script>
+<script src="app-ui.js?v=10"></script>
 </body>
 </html>
