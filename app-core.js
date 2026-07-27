@@ -11,7 +11,6 @@ const WEIGHTS={audio_energy_mean:1.0,audio_energy_peak:1.2,audio_burst:1.5,audio
 
 /* ================= STATE ================= */
 const S={videoFile:null,videoURL:null,videoDuration:0,sentences:[],candidates:[],selected:[],dropped:new Set(),added:new Set(),audioEnergy:null,audioStats:null,
-  /* captions OFF by default — user picks a template to enable */
   opts:{target_s:60,count:5,aspect:"9:16",capTemplate:"none",capPos:"bottom",capSize:"m",captions:false,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},
   exporting:false,cancelExport:false};
 let ytReady=false,manualReady=false;
@@ -105,7 +104,6 @@ function initOpts(){
   buildSegCtrl("#opt-aspect",["9:16","1:1","16:9"],["\ud83d\udcf1 9:16 vertical","\u25fb 1:1 square","\ud83d\udda5 16:9 wide"],"aspect","9:16");
   buildSegCtrl("#opt-cappos",["bottom","middle","top"],["\u2b07 Bottom","\u25cf Middle","\u2b06 Top"],"capPos","bottom");
   buildSegCtrl("#opt-capsize",["s","m","l"],["Small","Medium","Large"],"capSize","m");
-  /* caption template cards — "none" is selected by default */
   $$("#tpl-grid .tpl-card").forEach(c=>c.addEventListener("click",()=>{
     const tpl=c.dataset.tpl;
     S.opts.capTemplate=tpl;
@@ -120,7 +118,8 @@ function initOpts(){
 /* ================= SCORING ENGINE ================= */
 function tokenize(txt){return txt.toLowerCase().replace(/[^a-z0-9']/g," ").split(/\s+/).filter(Boolean).map(t=>t.replace(/[^a-z0-9]/g,"")).filter(t=>t&&!STOPWORDS.has(t));}
 function buildCorpus(sents){const docs=sents.map(s=>tokenize(s.text));const df={};for(const doc of docs){const seen=new Set(doc);for(const t of seen)df[t]=(df[t]||0)+1;}const n=Math.max(docs.length,1);const idf={};for(const[t,c]of Object.entries(df))idf[t]=Math.log(n/(1+c))+1;const vals=Object.values(idf);const meanIdf=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:1;const grams={};for(const doc of docs)for(let k=0;k<doc.length-2;k++){const g=doc[k]+"|"+doc[k+1]+"|"+doc[k+2];grams[g]=(grams[g]||0)+1;}const callbacks=new Set(Object.entries(grams).filter(([,c])=>c>=3).map(([g])=>g));return{idf,meanIdf,callbacks};}
-function buildCandidates(sents,targetS){const minLen=5,maxLen=targetS+Math.max(targetS*0.4,25);const cands=[];for(let i=0;i<sents.length;i++){for(let j=i;j<Math.min(i+12,sents.length);j++){const dur=sents[j].end-sents[i].start;if(dur>maxLen)break;if(dur>=minLen){const span=sents.slice(i,j+1),text=span.map(s=>s.text).join(" "),tokens=tokenize(text);cands.push({id:cands.length,sentLo:i,sentHi:j,start:sents[i].start,end:sents[j].end,duration:dur,text,tokens,sentences:span});}}}return cands;}
+/* Regions are found with a wider lookahead so there is real material to trim down when compressing. */
+function buildCandidates(sents,targetS){const minLen=5,maxLen=targetS*1.7+20;const lookahead=Math.min(80,Math.max(12,Math.ceil(targetS/2)));const cands=[];for(let i=0;i<sents.length;i++){for(let j=i;j<Math.min(i+lookahead,sents.length);j++){const dur=sents[j].end-sents[i].start;if(dur>maxLen)break;if(dur>=minLen){const span=sents.slice(i,j+1),text=span.map(s=>s.text).join(" "),tokens=tokenize(text);cands.push({id:cands.length,sentLo:i,sentHi:j,start:sents[i].start,end:sents[j].end,duration:dur,text,tokens,sentences:span});}}}return cands;}
 function extractFeatures(c,corpus,totalDur,ae,ideal,astats){const low=c.text.toLowerCase(),f={};
   f.text_arousal=c.tokens.reduce((s,t)=>s+(AROUSAL[t]||0),0)/Math.max(c.tokens.length,1);
   f.text_question=low.includes("?")?1:0;
@@ -138,7 +137,7 @@ function extractFeatures(c,corpus,totalDur,ae,ideal,astats){const low=c.text.toL
   f.struct_complete_ending=/[.!?]\s*$/.test(c.text.trim())?1:0;
   f.struct_speech_density=Math.min(c.tokens.length/Math.max(c.duration,1)/3,1);
   const rp=c.start/Math.max(totalDur,1);f.struct_position=(rp<0.12||rp>0.82)?0.8:0;
-  const sigma=Math.max(ideal*0.45,8);f.duration_fit=Math.exp(-((c.duration-ideal)**2)/(2*sigma*sigma));
+  const sigma=Math.max(ideal*0.6,10);f.duration_fit=Math.exp(-((c.duration-ideal)**2)/(2*sigma*sigma));
   if(ae&&ae.length&&astats){const i0=Math.max(0,Math.floor(c.start)),i1=Math.min(ae.length-1,Math.floor(c.end));const sl=ae.slice(i0,i1+1);
     if(sl.length){const mean=sl.reduce((a,b)=>a+b,0)/sl.length,peak=arrMax(sl);f.audio_energy_mean=mean;f.audio_energy_peak=peak;
       let maxZ=0;for(const x of sl){const z=(x-astats.mean)/astats.std;if(z>maxZ)maxZ=z;}f.audio_burst=Math.min(Math.max(maxZ,0)/3,1);
@@ -155,8 +154,65 @@ function selectTop(scored,n){const sel=[];if(!scored.length)return sel;const max
       const val=c.score-0.75*pen*maxScore;if(val>bestVal){bestVal=val;best=c;}}
     if(!best)break;sel.push(best);}
   return sel.sort((a,b)=>a.start-b.start);}
-function refineBounds(seg){const ae=S.audioEnergy;let cs=seg.start,ce=seg.end;if(ae&&ae.length){let g=0;while(g++<4&&ce-cs>6){const i=Math.floor(cs);if(i>=0&&i<ae.length&&ae[i]<0.04)cs+=0.5;else break;}g=0;while(g++<4&&ce-cs>6){const i=Math.floor(ce);if(i>=0&&i<ae.length&&ae[i]<0.04)ce-=0.5;else break;}}cs=Math.max(0,cs-0.15);return{cs,ce};}
-function ensureBounds(seg){if(seg.cs==null){const r=refineBounds(seg);seg.cs=r.cs;seg.ce=r.ce;}return seg;}
+
+/* ---- Per-sentence quality score, used to pick the good lines and drop the filler ---- */
+function computeSentenceScores(sentences,corpus,ae,astats){
+  const raw=sentences.map(s=>{
+    const low=s.text.toLowerCase();const toks=tokenize(s.text);let sc=0;
+    sc+=toks.reduce((a,t)=>a+(AROUSAL[t]||0),0)/Math.max(toks.length,1)*1.6;
+    if(low.includes("?"))sc+=0.8;
+    sc+=Math.min((s.text.match(/!/g)||[]).length,3)/3*0.9;
+    if(HOOK_PHRASES.some(p=>low.includes(p)))sc+=1.8;
+    if(PUNCHLINE_MARKERS.some(p=>low.includes(p)))sc+=1.0;
+    sc+=toks.reduce((a,t)=>a+(corpus.idf[t]||corpus.meanIdf),0)/Math.max(toks.length,1)*0.5;
+    if(ae&&ae.length&&astats){const i0=Math.max(0,Math.floor(s.start)),i1=Math.min(ae.length-1,Math.floor(s.end));const sl=ae.slice(i0,i1+1);
+      if(sl.length){const mean=sl.reduce((a,b)=>a+b,0)/sl.length,peak=arrMax(sl);sc+=mean*1.0+peak*0.6;
+        let maxZ=0;for(const x of sl){const z=(x-astats.mean)/astats.std;if(z>maxZ)maxZ=z;}sc+=Math.min(Math.max(maxZ,0)/3,1)*1.2;}}
+    const firstTok=toks[0]||"";if(CONTEXT_STARTERS.has(firstTok))sc*=0.7;
+    const wc=s.text.split(/\s+/).filter(Boolean).length;if(wc>=3&&wc<=22)sc+=0.3;
+    if(/[.!?]\s*$/.test(s.text.trim()))sc+=0.15;
+    return sc;});
+  const lo=arrMin(raw),hi=arrMax(raw);
+  return raw.map(v=>hi>lo?(v-lo)/(hi-lo):0.5);}
+
+/* ---- Within a chosen region, drop the weakest interior sentences until it hits the target length. ----
+   What's left, in chronological order, becomes a set of jump-cut sub-clips (only the good lines). */
+function compressRegion(region,sentences,sentScore,targetS){
+  const lo=region.sentLo,hi=region.sentHi;
+  if(hi<=lo)return[{sentLo:lo,sentHi:lo,cs:sentences[lo].start,ce:sentences[lo].end}];
+  const keep=new Set();for(let i=lo;i<=hi;i++)keep.add(i);
+  function totalDur(){let d=0;for(const i of keep)d+=Math.max(sentences[i].end-sentences[i].start,0);return d;}
+  const originalDur=totalDur();
+  const targetDur=Math.min(targetS,originalDur);
+  const minKeep=Math.max(2,Math.ceil((hi-lo+1)*0.4));
+  while(totalDur()>targetDur*1.1&&keep.size>minKeep){
+    const arr=[...keep].sort((a,b)=>a-b);
+    let worstIdx=-1,worstScore=Infinity;
+    for(let k=1;k<arr.length-1;k++){const i=arr[k];const sc=sentScore[i]||0;if(sc<worstScore){worstScore=sc;worstIdx=i;}}
+    if(worstIdx<0)break;
+    keep.delete(worstIdx);
+  }
+  const arr=[...keep].sort((a,b)=>a-b);
+  const cuts=[];let runStart=arr[0];
+  for(let k=0;k<arr.length;k++){
+    const atEnd=k+1>=arr.length||arr[k+1]!==arr[k]+1;
+    if(atEnd){const runEnd=arr[k];cuts.push({sentLo:runStart,sentHi:runEnd,cs:sentences[runStart].start,ce:sentences[runEnd].end});if(k+1<arr.length)runStart=arr[k+1];}
+  }
+  return cuts;}
+function refineCutBounds(cut){const ae=S.audioEnergy;let cs=cut.cs,ce=cut.ce;
+  if(ae&&ae.length){let g=0;while(g++<4&&ce-cs>2){const i=Math.floor(cs);if(i>=0&&i<ae.length&&ae[i]<0.04)cs+=0.3;else break;}
+    g=0;while(g++<4&&ce-cs>2){const i=Math.floor(ce);if(i>=0&&i<ae.length&&ae[i]<0.04)ce-=0.3;else break;}}
+  cs=Math.max(0,cs-0.12);return{cs,ce};}
+function buildMomentCuts(regions,sentences,sentScore,targetS){
+  for(const r of regions){
+    const rawCuts=compressRegion(r,sentences,sentScore,targetS);
+    let cuts=rawCuts.map(c=>{const rb=refineCutBounds(c);return{cs:rb.cs,ce:rb.ce,sentLo:c.sentLo,sentHi:c.sentHi};});
+    cuts.sort((a,b)=>a.cs-b.cs);
+    const merged=[];for(const c of cuts){const last=merged[merged.length-1];if(last&&c.cs-last.ce<0.25){last.ce=Math.max(last.ce,c.ce);}else merged.push({cs:c.cs,ce:c.ce,sentLo:c.sentLo,sentHi:c.sentHi});}
+    r.cuts=merged;
+    r.cutDuration=r.cuts.reduce((n,c)=>n+(c.ce-c.cs),0);
+  }
+  return regions;}
 
 /* ================= AUDIO ANALYSIS ================= */
 async function analyzeAudio(file){try{const ab=await file.arrayBuffer();const ctx=new(window.AudioContext||window.webkitAudioContext)();const audio=await ctx.decodeAudioData(ab);const data=audio.getChannelData(0),sr=audio.sampleRate,dur=audio.duration;const energy=[];for(let i=0;i<Math.ceil(dur);i++){const from=i*sr,to=Math.min(data.length,(i+1)*sr);let sum=0;for(let j=from;j<to;j++)sum+=data[j]*data[j];energy.push(Math.sqrt(sum/Math.max(to-from,1)));}const eMax=Math.max(arrMax(energy),0.0001);await ctx.close();return energy.map(v=>v/eMax);}catch(e){console.warn("Audio analysis failed:",e);return null;}}
