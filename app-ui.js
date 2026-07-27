@@ -63,7 +63,7 @@ function updatePlan(){renderTimeline();$("#now-playing").textContent="";showAler
 const CAP_MAX_WORDS=6;
 function wordSpans(sent){if(sent._words)return sent._words;const words=sent.text.split(/\s+/).filter(Boolean);const dur=Math.max(sent.end-sent.start,0.3);const per=dur/words.length;sent._words=words.map((w,i)=>({w,t0:sent.start+i*per,t1:sent.start+(i+1)*per}));return sent._words;}
 function capChunk(sent,t){const ws=wordSpans(sent);let idx=ws.findIndex(x=>t>=x.t0&&t<x.t1);if(idx<0)idx=t>=sent.end?ws.length-1:0;const c0=Math.floor(idx/CAP_MAX_WORDS)*CAP_MAX_WORDS;return{words:ws.slice(c0,c0+CAP_MAX_WORDS),active:idx-c0};}
-function updateOverlay(){const ov=$("#cap-overlay");const p=$("#player");if(!S.opts.captions||p.paused&&!p.seeking){if(!S.opts.captions){ov.style.opacity="0";return;}}
+function updateOverlay(){const ov=$("#cap-overlay");const p=$("#player");if(!S.opts.captions){ov.style.opacity="0";return;}
   const t=p.currentTime;const sent=S.sentences.find(s=>t>=s.start&&t<=s.end);
   if(!sent){ov.style.opacity="0";return;}
   const{words,active}=capChunk(sent,t);
@@ -134,6 +134,13 @@ function boot(){
   bindDrop("#video-drop","#video-input",handleVideo);
   bindDrop("#tr-drop","#tr-input",f=>{const rd=new FileReader();rd.onload=()=>handleTranscript(f.name,String(rd.result||""));rd.readAsText(f);});
   let deb;$("#tr-text").addEventListener("input",()=>{clearTimeout(deb);deb=setTimeout(()=>{const t=$("#tr-text").value.trim();if(t.length>10)handleTranscript(null,t);},700);});
+  /* Transcript source selector: Transcript 1 (API) / Transcript 2 (website) */
+  $$("#yt-source button").forEach(b=>b.addEventListener("click",()=>{
+    ytSource=Number(b.dataset.src)||1;
+    $$("#yt-source button").forEach(x=>x.classList.remove("sel"));
+    b.classList.add("sel");
+    ytReady=false;
+    $("#yt-status").textContent="Source set to Transcript "+ytSource+" \u2014 press \u26a1 Fetch transcript.";}));
   $("#yt-fetch").addEventListener("click",()=>{fetchYouTube();});
   $("#yt-url").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();fetchYouTube();}});
   $("#use-yt").addEventListener("click",async()=>{
