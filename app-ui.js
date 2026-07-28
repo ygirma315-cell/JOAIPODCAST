@@ -65,25 +65,48 @@ async function startRender(){goStep(5);
 function waitMeta(p){return new Promise(r=>{if(p.readyState>=1&&p.videoWidth)return r();const done=()=>{p.removeEventListener("loadedmetadata",done);p.removeEventListener("loadeddata",done);r();};p.addEventListener("loadedmetadata",done);p.addEventListener("loadeddata",done);setTimeout(done,8000);});}
 function seekTo(p,t){return new Promise(resolve=>{const target=Math.max(0,Math.min(t,(p.duration||t)-0.05));if(Math.abs((p.currentTime||0)-target)<0.05&&p.readyState>=2){resolve();return;}let settled=false;const finish=()=>{if(settled)return;settled=true;p.removeEventListener("seeked",onSeek);p.removeEventListener("loadeddata",onSeek);clearTimeout(to);resolve();};const onSeek=()=>finish();p.addEventListener("seeked",onSeek);p.addEventListener("loadeddata",onSeek);try{p.pause();}catch(e){}try{p.currentTime=target;}catch(e){finish();return;}const to=setTimeout(finish,2500);});}
 
-/* ================= SPEAKER AUTO-FOCUS (face tracking) ================= */
-const FOCUS={x:0.5,tx:0.5,det:null,busy:false,last:0,enabled:false};
+/* ================= SPEAKER AUTO-FOCUS (face tracking, downscaled = cheap) ================= */
+const FOCUS={x:0.5,tx:0.5,det:null,busy:false,last:0,enabled:false,cv:null,cctx:null};
 function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.busy=false;FOCUS.last=0;FOCUS.det=null;FOCUS.enabled=false;
   try{if(opt.focus!==false&&("FaceDetector" in window)){FOCUS.det=new window.FaceDetector({fastMode:true,maxDetectedFaces:4});FOCUS.enabled=true;}}catch(e){FOCUS.det=null;FOCUS.enabled=false;}}
-function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const now=performance.now();if(now-FOCUS.last<350)return;FOCUS.last=now;FOCUS.busy=true;
-  FOCUS.det.detect(p).then(faces=>{FOCUS.busy=false;if(!faces||!faces.length)return;
-    let best=faces[0];for(const f of faces){if(f.boundingBox.width>best.boundingBox.width)best=f;}
-    const vw=p.videoWidth||1;const cx=(best.boundingBox.x+best.boundingBox.width/2)/vw;
-    if(isFinite(cx))FOCUS.tx=Math.min(0.92,Math.max(0.08,cx));
-  }).catch(()=>{FOCUS.busy=false;});}
+function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const now=performance.now();if(now-FOCUS.last<500)return;FOCUS.last=now;FOCUS.busy=true;
+  try{
+    const vw=p.videoWidth||320,vh=p.videoHeight||180;
+    const dw=224,dh=Math.max(2,Math.round(dw*vh/vw));
+    if(!FOCUS.cv){FOCUS.cv=document.createElement("canvas");}
+    if(FOCUS.cv.width!==dw||FOCUS.cv.height!==dh){FOCUS.cv.width=dw;FOCUS.cv.height=dh;FOCUS.cctx=FOCUS.cv.getContext("2d",{willReadFrequently:true});}
+    if(!FOCUS.cctx)FOCUS.cctx=FOCUS.cv.getContext("2d",{willReadFrequently:true});
+    FOCUS.cctx.drawImage(p,0,0,dw,dh);
+    FOCUS.det.detect(FOCUS.cv).then(faces=>{FOCUS.busy=false;if(!faces||!faces.length)return;
+      let best=faces[0];for(const f of faces){if(f.boundingBox.width>best.boundingBox.width)best=f;}
+      const cx=(best.boundingBox.x+best.boundingBox.width/2)/dw;
+      if(isFinite(cx))FOCUS.tx=Math.min(0.92,Math.max(0.08,cx));
+    }).catch(()=>{FOCUS.busy=false;});
+  }catch(e){FOCUS.busy=false;}}
 
-/* ================= CAPTIONS ================= */
+/* ================= CAPTIONS (cached overlay — zero per-frame layout cost) ================= */
 const CAP_MAX_WORDS=6;
 function capStyle(opt){switch(opt.capTemplate){case "clean":return{upper:false,mono:false,text:"#FFFFFF",hl:opt.colorHl==="#FFFFFF"?"#FFD84D":opt.colorHl,glow:"rgba(0,0,0,.9)",box:false};case "mono":return{upper:false,mono:true,text:"#E8E8E8",hl:"#7CF5B8",glow:"rgba(0,0,0,.9)",box:false};case "neon":return{upper:true,mono:false,text:"#7DF9FF",hl:"#FF3CAC",glow:"rgba(0,229,255,.85)",box:false};case "boxed":return{upper:true,mono:false,text:"#FFFFFF",hl:"#FFE400",glow:null,box:true};default:return{upper:true,mono:false,text:opt.colorText||"#FFFF00",hl:opt.colorHl||"#FFFFFF",glow:"rgba(0,0,0,.9)",box:false};}}
 function wordSpans(sent){if(sent._words)return sent._words;const words=sent.text.split(/\s+/).filter(Boolean);const dur=Math.max(sent.end-sent.start,0.3);const per=dur/words.length;sent._words=words.map((w,i)=>({w,t0:sent.start+i*per,t1:sent.start+(i+1)*per}));return sent._words;}
 function capChunk(sent,t){const ws=wordSpans(sent);let idx=ws.findIndex(x=>t>=x.t0&&t<x.t1);if(idx<0)idx=t>=sent.end?ws.length-1:0;const c0=Math.floor(idx/CAP_MAX_WORDS)*CAP_MAX_WORDS;return{words:ws.slice(c0,c0+CAP_MAX_WORDS),active:idx-c0};}
 function cropRect(vw,vh,cw,ch){const sc=Math.max(cw/vw,ch/vh);const sw=cw/sc,sh=ch/sc;return{sx:(vw-sw)/2,sy:(vh-sh)/2,sw,sh};}
 function layoutWords(ctx,words,maxW){const lines=[];let line=[];for(const w of words){const test=line.concat([w]).map(x=>x.w).join(" ");if(ctx.measureText(test).width>maxW&&line.length){lines.push(line);line=[w];}else line.push(w);}if(line.length)lines.push(line);return lines.slice(0,2);}
-function drawCaption(ctx,cw,ch,t,opt){if(!opt.captions||opt.capTemplate==="none")return;const sent=S.sentences.find(s=>t>=s.start&&t<=s.end);if(!sent)return;const{words,active}=capChunk(sent,t);const st=capStyle(opt);const sizeMap={s:0.042,m:0.055,l:0.07};const fs=Math.round(cw*(sizeMap[opt.capSize]||0.055));ctx.font="900 "+(st.mono?Math.round(fs*0.9)+"px Menlo,Consolas,monospace":fs+"px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif");ctx.textAlign="center";ctx.textBaseline="middle";const lines=layoutWords(ctx,words,cw*0.86);const lh=fs*1.35;const posMap={bottom:0.86,middle:0.55,top:0.16};const anchor=ch*(posMap[opt.capPos]||0.86);const baseY=anchor-(lines.length-1)*lh;let wi=0;lines.forEach((line,li)=>{const texts=line.map(x=>st.upper?x.w.toUpperCase():x.w);const widths=texts.map(s2=>ctx.measureText(s2).width);const gap=fs*0.32;const totW=widths.reduce((a,b)=>a+b,0)+gap*(texts.length-1);let x=cw/2-totW/2;const y=baseY+li*lh;if(st.box){ctx.save();ctx.fillStyle="rgba(0,0,0,.78)";ctx.fillRect(cw/2-totW/2-fs*0.45,y-lh*0.52,totW+fs*0.9,lh*1.04);ctx.restore();}texts.forEach((s2,i)=>{const isOn=wi===active;ctx.save();if(st.glow){ctx.shadowColor=st.glow;ctx.shadowBlur=fs*0.35;ctx.lineWidth=Math.max(fs*0.12,3);ctx.strokeStyle="rgba(0,0,0,.85)";}const cx=x+widths[i]/2;if(isOn){ctx.translate(cx,y);ctx.scale(1.12,1.12);ctx.translate(-cx,-y);}if(st.glow)ctx.strokeText(s2,cx,y);ctx.fillStyle=isOn?st.hl:st.text;ctx.fillText(s2,cx,y);ctx.restore();x+=widths[i]+gap;wi++;});});}
+function findSentAt(t){const arr=S.sentences;if(!arr.length)return -1;let i=S._capIdx||0;if(i>=arr.length)i=0;
+  if(arr[i]&&t>=arr[i].start&&t<=arr[i].end)return i;
+  for(let k=i+1;k<Math.min(i+6,arr.length);k++)if(t>=arr[k].start&&t<=arr[k].end){S._capIdx=k;return k;}
+  for(let k=0;k<arr.length;k++)if(t>=arr[k].start&&t<=arr[k].end){S._capIdx=k;return k;}
+  return -1;}
+function renderCaptionInto(ctx,cw,ch,words,active,opt){const st=capStyle(opt);const sizeMap={s:0.042,m:0.055,l:0.07};const fs=Math.round(cw*(sizeMap[opt.capSize]||0.055));ctx.font="900 "+(st.mono?Math.round(fs*0.9)+"px Menlo,Consolas,monospace":fs+"px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif");ctx.textAlign="center";ctx.textBaseline="middle";const lines=layoutWords(ctx,words,cw*0.86);const lh=fs*1.35;const posMap={bottom:0.86,middle:0.55,top:0.16};const anchor=ch*(posMap[opt.capPos]||0.86);const baseY=anchor-(lines.length-1)*lh;let wi=0;lines.forEach((line,li)=>{const texts=line.map(x=>st.upper?x.w.toUpperCase():x.w);const widths=texts.map(s2=>ctx.measureText(s2).width);const gap=fs*0.32;const totW=widths.reduce((a,b)=>a+b,0)+gap*(texts.length-1);let x=cw/2-totW/2;const y=baseY+li*lh;if(st.box){ctx.save();ctx.fillStyle="rgba(0,0,0,.78)";ctx.fillRect(cw/2-totW/2-fs*0.45,y-lh*0.52,totW+fs*0.9,lh*1.04);ctx.restore();}texts.forEach((s2,i)=>{const isOn=wi===active;ctx.save();if(st.glow){ctx.shadowColor=st.glow;ctx.shadowBlur=fs*0.35;ctx.lineWidth=Math.max(fs*0.12,3);ctx.strokeStyle="rgba(0,0,0,.85)";}const cx=x+widths[i]/2;if(isOn){ctx.translate(cx,y);ctx.scale(1.12,1.12);ctx.translate(-cx,-y);}if(st.glow)ctx.strokeText(s2,cx,y);ctx.fillStyle=isOn?st.hl:st.text;ctx.fillText(s2,cx,y);ctx.restore();x+=widths[i]+gap;wi++;});});}
+const CAPC={key:"",cv:null,ctx:null};
+function drawCaption(ctx,cw,ch,t,opt){if(!opt.captions||opt.capTemplate==="none")return;const si=findSentAt(t);if(si<0)return;const sent=S.sentences[si];const{words,active}=capChunk(sent,t);if(!words||!words.length)return;
+  const key=si+"|"+(words[0]?words[0].t0.toFixed(3):"0")+"|"+active+"|"+opt.capTemplate+"|"+opt.capPos+"|"+opt.capSize+"|"+cw+"x"+ch;
+  if(CAPC.key!==key||!CAPC.cv){
+    if(!CAPC.cv||CAPC.cv.width!==cw||CAPC.cv.height!==ch){CAPC.cv=document.createElement("canvas");CAPC.cv.width=cw;CAPC.cv.height=ch;CAPC.ctx=CAPC.cv.getContext("2d");}
+    CAPC.ctx.clearRect(0,0,cw,ch);
+    renderCaptionInto(CAPC.ctx,cw,ch,words,active,opt);
+    CAPC.key=key;
+  }
+  ctx.drawImage(CAPC.cv,0,0);}
 function drawWM(ctx,cw,ch,text){if(!text)return;ctx.save();const fs=Math.round(cw*0.03);ctx.font="700 "+fs+"px -apple-system,sans-serif";ctx.textAlign="right";ctx.textBaseline="top";ctx.shadowColor="rgba(0,0,0,.7)";ctx.shadowBlur=6;ctx.fillStyle="rgba(255,255,255,.82)";ctx.fillText(text,cw-fs,fs);ctx.restore();}
 
 /* ================= ROBUST RENDER ENGINE ================= */
@@ -91,13 +114,14 @@ async function exportClips(){if(S.exporting)return;
   const moments=(S.selected||[]).filter(m=>m.cuts&&m.cuts.length);
   if(!moments.length){showAlert("Nothing to render \u2014 run the analysis first.");goStep(3);return;}
   const opt={...S.opts,count:1};S.exporting=true;S.cancelExport=false;
+  S._capIdx=0;CAPC.key="";
   $("#export-bar").style.width="0%";$("#export-pct").textContent="0%";
   $("#export-log").textContent="Preparing renderer\u2026";
   const p=$("#player");p.muted=true;p.volume=0;p.playbackRate=1;p.playsInline=true;
   if(!p.src||p.src!==S.videoURL){p.src=S.videoURL;p.load();}await waitMeta(p);
   setupFocus(opt);
   let cw=1080,ch=1920;if(opt.aspect==="1:1"){cw=1080;ch=1080;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
-  const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
+  const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="medium";
   const fps=30;const stream=canvas.captureStream(fps);
   try{const ps=p.captureStream?p.captureStream():(p.mozCaptureStream?p.mozCaptureStream():null);if(ps){ps.getAudioTracks().forEach(t=>{try{stream.addTrack(t);}catch(e){}});} }catch(e){console.warn("No audio track:",e);}
   let mime="video/webm;codecs=vp9,opus";if(!window.MediaRecorder||!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
@@ -106,6 +130,7 @@ async function exportClips(){if(S.exporting)return;
   ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);if(rec.state==="inactive")rec.start(200);await sleep(120);
   const planned=moments.reduce((n,m)=>n+(m.cutDuration||0),0)||1;let rendered=0;const F=0.35,CUTPOP=0.12;
   const totalCutsAll=moments.reduce((n,m)=>n+m.cuts.length,0);let cutIndex=0;
+  const frameMs=1000/fps;
   function drawFrame(srcT,cut,mi,ci,cutT,cutDur){const vw=p.videoWidth||cw,vh=p.videoHeight||ch;let cr=cropRect(vw,vh,cw,ch);
     if(FOCUS.enabled&&cr.sw<vw-1){const desired=FOCUS.x*vw-cr.sw/2;cr.sx=Math.min(Math.max(desired,0),vw-cr.sw);}
     if(opt.zoom){const zp=Math.min(Math.max(cutT/Math.max(cutDur,0.01),0),1);const z=1+0.06*zp;const sw2=cr.sw/z,sh2=cr.sh/z;cr={sx:cr.sx+(cr.sw-sw2)/2,sy:cr.sy+(cr.sh-sh2)/2,sw:sw2,sh:sh2};}
@@ -115,8 +140,21 @@ async function exportClips(){if(S.exporting)return;
     for(let ci=0;ci<cuts.length&&!S.cancelExport;ci++){const cut=cuts[ci];cutIndex++;const cutDur=Math.max(cut.ce-cut.cs,0.2);
       $("#export-log").textContent="\ud83c\udfac Rendering cut "+cutIndex+"/"+totalCutsAll+" \u00b7 "+fmtTime(rendered)+" / "+fmtTime(planned);
       await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;try{p.muted=true;p.volume=0;await p.play();}catch(e){}
-      const t0=performance.now();let lastVidT=p.currentTime;let stuckMs=0;
-      await new Promise(resolve=>{function tick(){if(S.cancelExport){resolve();return;}updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.10;const wall=(performance.now()-t0)/1000;let vidT=p.currentTime;if(Math.abs(vidT-lastVidT)<0.001){stuckMs+=1000/fps;}else{stuckMs=0;lastVidT=vidT;}if(stuckMs>900){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;stuckMs=0;}const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);const cutT=Math.min(Math.max(srcT-cut.cs,wall),cutDur);drawFrame(srcT,cut,mi,ci,cutT,cutDur);const prog=(rendered+Math.min(cutT,cutDur))/planned*100;const pct=Math.min(Math.round(prog),99);$("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";const doneByVid=vidT>=cut.ce-0.04;const doneByWall=wall>=cutDur;const ended=p.ended&&vidT>=cut.ce-0.5;if(doneByVid||doneByWall||ended){resolve();return;}requestAnimationFrame(tick);}requestAnimationFrame(tick);});
+      const t0=performance.now();let lastVidT=p.currentTime;let stuckMs=0;let lastDraw=0;
+      await new Promise(resolve=>{function tick(){if(S.cancelExport){resolve();return;}
+        const nowMs=performance.now();
+        if(nowMs-lastDraw<frameMs-2){requestAnimationFrame(tick);return;}
+        lastDraw=nowMs;
+        updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.10;
+        const wall=(nowMs-t0)/1000;let vidT=p.currentTime;
+        if(Math.abs(vidT-lastVidT)<0.001){stuckMs+=frameMs;}else{stuckMs=0;lastVidT=vidT;}
+        if(stuckMs>900){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;stuckMs=0;}
+        const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);const cutT=Math.min(Math.max(srcT-cut.cs,wall),cutDur);
+        drawFrame(srcT,cut,mi,ci,cutT,cutDur);
+        const prog=(rendered+Math.min(cutT,cutDur))/planned*100;const pct=Math.min(Math.round(prog),99);$("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";
+        const doneByVid=vidT>=cut.ce-0.04;const doneByWall=wall>=cutDur;const ended=p.ended&&vidT>=cut.ce-0.5;
+        if(doneByVid||doneByWall||ended){resolve();return;}
+        requestAnimationFrame(tick);}requestAnimationFrame(tick);});
       try{p.pause();}catch(e){}rendered+=cutDur;}}
   if(!S.cancelExport){const holdEnd=performance.now()+250;while(performance.now()<holdEnd){await sleep(40);}}
   try{if(rec.state==="recording"){rec.requestData&&rec.requestData();rec.stop();}}catch(e){}await stopped;await sleep(80);
