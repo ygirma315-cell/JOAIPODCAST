@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION="v19";
-const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 Fixed video lagging / freezing during render\n\u2022 Fixed audio playing ahead of (separating from) the video in the final output\n\u2022 Lighter encoder (720p HD) so it runs smooth even on slower computers\n\u2022 Captions no longer cause stutter (cached overlay)\n\u2022 Overall render output debugging";
+const APP_VERSION="v20";
+const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 Final video now exports as MP4 (plays in every player) when your browser supports it\n\u2022 Audio & video hard-synced \u2014 picture is locked to the audio clock while rendering\n\u2022 Fixed video lagging / freezing during render\n\u2022 Lighter encoder (720p HD) \u2014 smooth even on slower computers\n\u2022 Captions no longer cause stutter";
 
 /* ================= STEP 4: ANALYZE (single best clip) ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Scanning for the best part"],["score","Scoring virality signals"],["select","Picking the #1 moment"],["refine","Cropping filler to target length"]];
@@ -112,10 +112,22 @@ function drawCaption(ctx,cw,ch,t,opt){if(!opt.captions||opt.capTemplate==="none"
   ctx.drawImage(CAPC.cv,0,0);}
 function drawWM(ctx,cw,ch,text){if(!text)return;ctx.save();const fs=Math.round(cw*0.03);ctx.font="700 "+fs+"px -apple-system,sans-serif";ctx.textAlign="right";ctx.textBaseline="top";ctx.shadowColor="rgba(0,0,0,.7)";ctx.shadowBlur=6;ctx.fillStyle="rgba(255,255,255,.82)";ctx.fillText(text,cw-fs,fs);ctx.restore();}
 
+/* ================= CODEC PICKER =================
+   MP4 (H.264 + AAC) plays literally everywhere — phones, TVs, WhatsApp, editors.
+   We try MP4 first and only fall back to WebM if the browser can't record MP4. */
+function pickRecorderFormat(){
+  const mp4Types=["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4;codecs=avc1.424028,mp4a.40.2","video/mp4;codecs=avc1,mp4a.40.2","video/mp4;codecs=avc1,opus","video/mp4;codecs=avc1","video/mp4"];
+  const webmTypes=["video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus","video/webm;codecs=vp8","video/webm"];
+  if(window.MediaRecorder){
+    for(const t of mp4Types){try{if(MediaRecorder.isTypeSupported(t))return{mime:t,ext:"mp4"};}catch(e){}}
+    for(const t of webmTypes){try{if(MediaRecorder.isTypeSupported(t))return{mime:t,ext:"webm"};}catch(e){}}
+  }
+  return{mime:"video/webm",ext:"webm"};}
+
 /* ================= ROBUST RENDER ENGINE =================
-   v19: 720p-class output + VP8-first encoding = realtime encode even on slow machines
-   (no more dropped frames while audio runs ahead), and the recorder is PAUSED during
-   seeks between cuts so audio and video always stay glued together. */
+   v20: MP4-first output for universal playback + active A/V drift lock:
+   the picture is continuously re-aligned to the audio (wall) clock, so voice
+   and video can never drift apart. Recorder pauses during seeks between cuts. */
 async function exportClips(){if(S.exporting)return;
   const moments=(S.selected||[]).filter(m=>m.cuts&&m.cuts.length);
   if(!moments.length){showAlert("Nothing to render \u2014 run the analysis first.");goStep(3);return;}
@@ -130,12 +142,8 @@ async function exportClips(){if(S.exporting)return;
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="medium";
   const fps=30;const stream=canvas.captureStream(fps);
   try{const ps=p.captureStream?p.captureStream():(p.mozCaptureStream?p.mozCaptureStream():null);if(ps){ps.getAudioTracks().forEach(t=>{try{stream.addTrack(t);}catch(e){}});} }catch(e){console.warn("No audio track:",e);}
-  /* VP8 first: much faster realtime encoding than VP9 — the #1 cause of laggy output on slower machines */
-  let mime="video/webm;codecs=vp8,opus";
-  if(!window.MediaRecorder||!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp9,opus";
-  if(!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8";
-  if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
-  let rec;try{rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4_500_000});}catch(e){try{rec=new MediaRecorder(stream,{mimeType:"video/webm",videoBitsPerSecond:3_500_000});mime="video/webm";}catch(e2){showAlert("This browser cannot record video (MediaRecorder missing). Try Chrome/Edge on desktop.");S.exporting=false;return;}}
+  const fmt=pickRecorderFormat();let mime=fmt.mime,ext=fmt.ext;
+  let rec;try{rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4_500_000,audioBitsPerSecond:128_000});}catch(e){try{rec=new MediaRecorder(stream,{mimeType:"video/webm",videoBitsPerSecond:3_500_000});mime="video/webm";ext="webm";}catch(e2){showAlert("This browser cannot record video (MediaRecorder missing). Try Chrome/Edge on desktop.");S.exporting=false;return;}}
   const chunks=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};const stopped=new Promise(res=>{rec.onstop=()=>res();rec.onerror=()=>res();});
   function recPause(){try{if(rec.state==="recording")rec.pause();}catch(e){}}
   function recResume(){try{if(rec.state==="paused")rec.resume();}catch(e){}}
@@ -151,14 +159,13 @@ async function exportClips(){if(S.exporting)return;
   for(let mi=0;mi<moments.length&&!S.cancelExport;mi++){const moment=moments[mi];const cuts=moment.cuts;
     for(let ci=0;ci<cuts.length&&!S.cancelExport;ci++){const cut=cuts[ci];cutIndex++;const cutDur=Math.max(cut.ce-cut.cs,0.2);
       $("#export-log").textContent="\ud83c\udfac Rendering cut "+cutIndex+"/"+totalCutsAll+" \u00b7 "+fmtTime(rendered)+" / "+fmtTime(planned);
-      /* Pause the recorder while we jump to the next cut — otherwise silent/frozen
-         moments get recorded and audio drifts apart from the video */
+      /* Recorder pauses while we jump between cuts — no silent/frozen gap gets recorded */
       recPause();
       await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;
       try{p.muted=true;p.volume=0;await p.play();}catch(e){}
       drawFrame(Math.max(p.currentTime,cut.cs),cut,mi,ci,0,cutDur);
       recResume();
-      const t0=performance.now();let lastVidT=p.currentTime;let stuckMs=0;let lastDraw=0;
+      const t0=performance.now();let lastVidT=p.currentTime;let stuckMs=0;let lastDraw=0;let lastSync=0;
       await new Promise(resolve=>{function tick(){if(S.cancelExport){resolve();return;}
         const nowMs=performance.now();
         if(nowMs-lastDraw<frameMs-2){requestAnimationFrame(tick);return;}
@@ -166,7 +173,11 @@ async function exportClips(){if(S.exporting)return;
         updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.10;
         const wall=(nowMs-t0)/1000;let vidT=p.currentTime;
         if(Math.abs(vidT-lastVidT)<0.001){stuckMs+=frameMs;}else{stuckMs=0;lastVidT=vidT;}
-        if(stuckMs>900){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;stuckMs=0;}
+        if(stuckMs>700){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;stuckMs=0;lastSync=nowMs;}
+        /* HARD A/V SYNC LOCK: audio records on the wall clock, so if the picture
+           falls more than 0.4s behind real time we snap it back in line */
+        const relV=vidT-cut.cs;
+        if(wall-relV>0.4&&nowMs-lastSync>1000){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;lastSync=nowMs;}
         const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);const cutT=Math.min(Math.max(srcT-cut.cs,wall),cutDur);
         drawFrame(srcT,cut,mi,ci,cutT,cutDur);
         const prog=(rendered+Math.min(cutT,cutDur))/planned*100;const pct=Math.min(Math.round(prog),99);$("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";
@@ -181,12 +192,15 @@ async function exportClips(){if(S.exporting)return;
   if(S.cancelExport){$("#export-log").textContent="Render cancelled.";$("#export-bar").style.width="0%";$("#export-pct").textContent="";goStep(3);return;}
   if(!chunks.length){showAlert("Render produced an empty file. Try Chrome/Edge, keep the tab visible, and re-render.");goStep(3);return;}
   $("#export-bar").style.width="100%";$("#export-pct").textContent="100%";
-  const blob=new Blob(chunks,{type:mime.startsWith("video/")?mime.split(";")[0]:"video/webm"});
+  const blobType=ext==="mp4"?"video/mp4":"video/webm";
+  const blob=new Blob(chunks,{type:blobType});
   if(S._lastBlobUrl){try{URL.revokeObjectURL(S._lastBlobUrl);}catch(e){}}const blobUrl=URL.createObjectURL(blob);S._lastBlobUrl=blobUrl;
   const fp=$("#final-player");fp.pause();fp.removeAttribute("src");fp.load();fp.preload="auto";fp.controls=true;fp.playsInline=true;fp.src=blobUrl;fp.load();
-  const dl=$("#download");dl.href=blobUrl;dl.download="podcast_clip_"+Date.now()+".webm";dl.setAttribute("download","podcast_clip_"+Date.now()+".webm");
+  const fname="podcast_clip_"+Date.now()+"."+ext;
+  const dl=$("#download");dl.href=blobUrl;dl.download=fname;dl.setAttribute("download",fname);
   const tgt=opt.target_s||120;
-  $("#final-info").innerHTML="\u2705 Render complete! <strong>1 best clip</strong> \u00b7 <strong>"+totalCutsAll+" jump-cut"+(totalCutsAll===1?"":"s")+"</strong> \u00b7 Length: <strong>"+fmtTime(planned)+"</strong> (target "+fmtTime(tgt)+") \u00b7 "+fmtBytes(blob.size)+" \u00b7 WebM "+APP_VERSION;
+  const fmtName=ext==="mp4"?"MP4 \u00b7 plays everywhere \u2705":"WebM (this browser can't record MP4 \u2014 use Chrome/Edge for MP4)";
+  $("#final-info").innerHTML="\u2705 Render complete! <strong>1 best clip</strong> \u00b7 <strong>"+totalCutsAll+" jump-cut"+(totalCutsAll===1?"":"s")+"</strong> \u00b7 Length: <strong>"+fmtTime(planned)+"</strong> (target "+fmtTime(tgt)+") \u00b7 "+fmtBytes(blob.size)+" \u00b7 "+fmtName+" \u00b7 "+APP_VERSION;
   $("#render-box").style.display="none";$("#final-box").style.display="block";
   await new Promise(r=>{const ok=()=>{fp.removeEventListener("canplay",ok);fp.removeEventListener("loadeddata",ok);clearTimeout(t);r();};fp.addEventListener("canplay",ok);fp.addEventListener("loadeddata",ok);const t=setTimeout(ok,4000);});
   try{fp.currentTime=0;await fp.play();}catch(e){}}
