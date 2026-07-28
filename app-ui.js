@@ -1,5 +1,8 @@
 "use strict";
 
+const APP_VERSION="v19";
+const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 Fixed video lagging / freezing during render\n\u2022 Fixed audio playing ahead of (separating from) the video in the final output\n\u2022 Lighter encoder (720p HD) so it runs smooth even on slower computers\n\u2022 Captions no longer cause stutter (cached overlay)\n\u2022 Overall render output debugging";
+
 /* ================= STEP 4: ANALYZE (single best clip) ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Scanning for the best part"],["score","Scoring virality signals"],["select","Picking the #1 moment"],["refine","Cropping filler to target length"]];
 const STAGE_PCT={probe:12,audio:38,cands:56,score:74,select:88,refine:100};
@@ -109,7 +112,10 @@ function drawCaption(ctx,cw,ch,t,opt){if(!opt.captions||opt.capTemplate==="none"
   ctx.drawImage(CAPC.cv,0,0);}
 function drawWM(ctx,cw,ch,text){if(!text)return;ctx.save();const fs=Math.round(cw*0.03);ctx.font="700 "+fs+"px -apple-system,sans-serif";ctx.textAlign="right";ctx.textBaseline="top";ctx.shadowColor="rgba(0,0,0,.7)";ctx.shadowBlur=6;ctx.fillStyle="rgba(255,255,255,.82)";ctx.fillText(text,cw-fs,fs);ctx.restore();}
 
-/* ================= ROBUST RENDER ENGINE ================= */
+/* ================= ROBUST RENDER ENGINE =================
+   v19: 720p-class output + VP8-first encoding = realtime encode even on slow machines
+   (no more dropped frames while audio runs ahead), and the recorder is PAUSED during
+   seeks between cuts so audio and video always stay glued together. */
 async function exportClips(){if(S.exporting)return;
   const moments=(S.selected||[]).filter(m=>m.cuts&&m.cuts.length);
   if(!moments.length){showAlert("Nothing to render \u2014 run the analysis first.");goStep(3);return;}
@@ -120,14 +126,20 @@ async function exportClips(){if(S.exporting)return;
   const p=$("#player");p.muted=true;p.volume=0;p.playbackRate=1;p.playsInline=true;
   if(!p.src||p.src!==S.videoURL){p.src=S.videoURL;p.load();}await waitMeta(p);
   setupFocus(opt);
-  let cw=1080,ch=1920;if(opt.aspect==="1:1"){cw=1080;ch=1080;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
+  let cw=720,ch=1280;if(opt.aspect==="1:1"){cw=720;ch=720;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="medium";
   const fps=30;const stream=canvas.captureStream(fps);
   try{const ps=p.captureStream?p.captureStream():(p.mozCaptureStream?p.mozCaptureStream():null);if(ps){ps.getAudioTracks().forEach(t=>{try{stream.addTrack(t);}catch(e){}});} }catch(e){console.warn("No audio track:",e);}
-  let mime="video/webm;codecs=vp9,opus";if(!window.MediaRecorder||!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
-  let rec;try{rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:6_000_000});}catch(e){try{rec=new MediaRecorder(stream,{mimeType:"video/webm",videoBitsPerSecond:4_000_000});mime="video/webm";}catch(e2){showAlert("This browser cannot record video (MediaRecorder missing). Try Chrome/Edge on desktop.");S.exporting=false;return;}}
+  /* VP8 first: much faster realtime encoding than VP9 — the #1 cause of laggy output on slower machines */
+  let mime="video/webm;codecs=vp8,opus";
+  if(!window.MediaRecorder||!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp9,opus";
+  if(!MediaRecorder.isTypeSupported(mime))mime="video/webm;codecs=vp8";
+  if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
+  let rec;try{rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4_500_000});}catch(e){try{rec=new MediaRecorder(stream,{mimeType:"video/webm",videoBitsPerSecond:3_500_000});mime="video/webm";}catch(e2){showAlert("This browser cannot record video (MediaRecorder missing). Try Chrome/Edge on desktop.");S.exporting=false;return;}}
   const chunks=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};const stopped=new Promise(res=>{rec.onstop=()=>res();rec.onerror=()=>res();});
-  ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);if(rec.state==="inactive")rec.start(200);await sleep(120);
+  function recPause(){try{if(rec.state==="recording")rec.pause();}catch(e){}}
+  function recResume(){try{if(rec.state==="paused")rec.resume();}catch(e){}}
+  ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);if(rec.state==="inactive")rec.start(200);
   const planned=moments.reduce((n,m)=>n+(m.cutDuration||0),0)||1;let rendered=0;const F=0.35,CUTPOP=0.12;
   const totalCutsAll=moments.reduce((n,m)=>n+m.cuts.length,0);let cutIndex=0;
   const frameMs=1000/fps;
@@ -139,7 +151,13 @@ async function exportClips(){if(S.exporting)return;
   for(let mi=0;mi<moments.length&&!S.cancelExport;mi++){const moment=moments[mi];const cuts=moment.cuts;
     for(let ci=0;ci<cuts.length&&!S.cancelExport;ci++){const cut=cuts[ci];cutIndex++;const cutDur=Math.max(cut.ce-cut.cs,0.2);
       $("#export-log").textContent="\ud83c\udfac Rendering cut "+cutIndex+"/"+totalCutsAll+" \u00b7 "+fmtTime(rendered)+" / "+fmtTime(planned);
-      await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;try{p.muted=true;p.volume=0;await p.play();}catch(e){}
+      /* Pause the recorder while we jump to the next cut — otherwise silent/frozen
+         moments get recorded and audio drifts apart from the video */
+      recPause();
+      await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;
+      try{p.muted=true;p.volume=0;await p.play();}catch(e){}
+      drawFrame(Math.max(p.currentTime,cut.cs),cut,mi,ci,0,cutDur);
+      recResume();
       const t0=performance.now();let lastVidT=p.currentTime;let stuckMs=0;let lastDraw=0;
       await new Promise(resolve=>{function tick(){if(S.cancelExport){resolve();return;}
         const nowMs=performance.now();
@@ -156,8 +174,9 @@ async function exportClips(){if(S.exporting)return;
         if(doneByVid||doneByWall||ended){resolve();return;}
         requestAnimationFrame(tick);}requestAnimationFrame(tick);});
       try{p.pause();}catch(e){}rendered+=cutDur;}}
+  recResume();
   if(!S.cancelExport){const holdEnd=performance.now()+250;while(performance.now()<holdEnd){await sleep(40);}}
-  try{if(rec.state==="recording"){rec.requestData&&rec.requestData();rec.stop();}}catch(e){}await stopped;await sleep(80);
+  try{if(rec.state!=="inactive"){rec.requestData&&rec.requestData();rec.stop();}}catch(e){}await stopped;await sleep(80);
   try{stream.getTracks().forEach(t=>t.stop());}catch(e){}p.muted=false;p.volume=1;S.exporting=false;
   if(S.cancelExport){$("#export-log").textContent="Render cancelled.";$("#export-bar").style.width="0%";$("#export-pct").textContent="";goStep(3);return;}
   if(!chunks.length){showAlert("Render produced an empty file. Try Chrome/Edge, keep the tab visible, and re-render.");goStep(3);return;}
@@ -167,7 +186,7 @@ async function exportClips(){if(S.exporting)return;
   const fp=$("#final-player");fp.pause();fp.removeAttribute("src");fp.load();fp.preload="auto";fp.controls=true;fp.playsInline=true;fp.src=blobUrl;fp.load();
   const dl=$("#download");dl.href=blobUrl;dl.download="podcast_clip_"+Date.now()+".webm";dl.setAttribute("download","podcast_clip_"+Date.now()+".webm");
   const tgt=opt.target_s||120;
-  $("#final-info").innerHTML="\u2705 Render complete! <strong>1 best clip</strong> \u00b7 <strong>"+totalCutsAll+" jump-cut"+(totalCutsAll===1?"":"s")+"</strong> \u00b7 Length: <strong>"+fmtTime(planned)+"</strong> (target "+fmtTime(tgt)+") \u00b7 "+fmtBytes(blob.size)+" \u00b7 WebM";
+  $("#final-info").innerHTML="\u2705 Render complete! <strong>1 best clip</strong> \u00b7 <strong>"+totalCutsAll+" jump-cut"+(totalCutsAll===1?"":"s")+"</strong> \u00b7 Length: <strong>"+fmtTime(planned)+"</strong> (target "+fmtTime(tgt)+") \u00b7 "+fmtBytes(blob.size)+" \u00b7 WebM "+APP_VERSION;
   $("#render-box").style.display="none";$("#final-box").style.display="block";
   await new Promise(r=>{const ok=()=>{fp.removeEventListener("canplay",ok);fp.removeEventListener("loadeddata",ok);clearTimeout(t);r();};fp.addEventListener("canplay",ok);fp.addEventListener("loadeddata",ok);const t=setTimeout(ok,4000);});
   try{fp.currentTime=0;await fp.play();}catch(e){}}
@@ -190,6 +209,8 @@ function setAiProgress(msg,pct){
 /* ================= BOOT ================= */
 function boot(){
   initGate();initOpts();goStep(1);S.opts.count=1;
+  const vb=$("#ver-btn");
+  if(vb){vb.textContent=APP_VERSION+" \u00b7 latest";vb.title="Click to see what's new";vb.addEventListener("click",()=>alert(APP_CHANGELOG));}
   bindDrop("#video-drop","#video-input",handleVideo);
   bindDrop("#tr-drop","#tr-input",f=>{const rd=new FileReader();rd.onload=()=>handleTranscript(f.name,String(rd.result||""));rd.readAsText(f);});
   let deb;const trText=$("#tr-text");
