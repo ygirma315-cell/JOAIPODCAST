@@ -11,7 +11,7 @@ const WEIGHTS={audio_energy_mean:1.0,audio_energy_peak:1.2,audio_burst:1.5,audio
 
 /* ================= STATE ================= */
 const S={videoFile:null,videoURL:null,videoDuration:0,sentences:[],candidates:[],selected:[],dropped:new Set(),added:new Set(),audioEnergy:null,audioStats:null,
-  opts:{target_s:120,count:1,aspect:"9:16",capTemplate:"none",capPos:"bottom",capSize:"m",captions:false,fades:true,zoom:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},
+  opts:{target_s:120,count:1,aspect:"9:16",capTemplate:"none",capPos:"bottom",capSize:"m",captions:false,fades:true,zoom:true,focus:true,watermark:false,wmText:"",colorText:"#FFFF00",colorHl:"#FFFFFF"},
   exporting:false,cancelExport:false};
 let ytReady=false,manualReady=false,aiReady=false;
 
@@ -27,7 +27,14 @@ function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 function goStep(n){for(let i=1;i<=5;i++)$("#panel-"+i).hidden=i!==n;$$(".step").forEach(el=>{const s=Number(el.dataset.step);el.classList.toggle("active",s===n);el.classList.toggle("done",s<n);});showAlert("");}
 function infoGrid(sel,cells){const el=$(sel);el.innerHTML="";cells.forEach(([k,v],i)=>{const d=document.createElement("div");d.className="cell";d.style.animationDelay=(i*60)+"ms";d.innerHTML='<div class="k"></div><div class="v"></div>';d.querySelector(".k").textContent=k;d.querySelector(".v").textContent=v;el.appendChild(d);});el.hidden=false;}
 function buildSegCtrl(sel,vals,labels,key,def){const box=$(sel);if(!box)return;box.innerHTML="";vals.forEach((v,i)=>{const b=document.createElement("button");b.type="button";b.textContent=labels?labels[i]:String(v);if(String(def??S.opts[key])===String(v))b.classList.add("sel");b.addEventListener("click",()=>{S.opts[key]=v;box.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");});box.appendChild(b);});}
-function bindDrop(zone,inp,cb){const z=$(zone),i=$(inp);z.addEventListener("click",()=>i.click());z.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();i.click();}});i.addEventListener("change",()=>{if(i.files[0])cb(i.files[0]);});["dragover","dragenter"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.add("drag");}));["dragleave","drop"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.remove("drag");}));z.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)cb(f);});}
+/* Mobile-safe: if the tap landed on a <label for=...> or the input itself, let the browser handle it natively (no double-open) */
+function bindDrop(zone,inp,cb){const z=$(zone),i=$(inp);if(!z||!i)return;
+  z.addEventListener("click",e=>{const t=e.target;if(t&&(t.tagName==="LABEL"||t.tagName==="INPUT"||t.closest("label")))return;i.click();});
+  z.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();i.click();}});
+  i.addEventListener("change",()=>{if(i.files&&i.files[0])cb(i.files[0]);});
+  ["dragover","dragenter"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.add("drag");}));
+  ["dragleave","drop"].forEach(ev=>z.addEventListener(ev,e=>{e.preventDefault();z.classList.remove("drag");}));
+  z.addEventListener("drop",e=>{const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];if(f)cb(f);});}
 function durationWindow(targetS){const ideal=Math.max(15,targetS||120);const minS=Math.max(ideal-15,Math.round(ideal*0.875));const maxS=Math.min(ideal+20,Math.round(ideal*1.167));return{ideal,minS,maxS};}
 
 /* ================= LOGIN GATE ================= */
@@ -56,7 +63,7 @@ function initGate(){const g=$("#login-gate");if(!g)return;
     else{card.classList.remove("shake");void card.offsetWidth;card.classList.add("shake");err.textContent="Hmm, that's not it \u2014 the free plan is for Friendship members only.";$("#login-pass").value="";}});}
 
 /* ================= STEP 1: VIDEO ================= */
-function handleVideo(file){if(!file)return;if(S.videoURL)URL.revokeObjectURL(S.videoURL);S.videoFile=file;S.videoURL=URL.createObjectURL(file);const v=document.createElement("video");v.preload="metadata";v.onloadedmetadata=()=>{S.videoDuration=v.duration;infoGrid("#video-info",[["File",file.name],["Size",fmtBytes(file.size)],["Duration",fmtTime(v.duration)],["Resolution",v.videoWidth+"\u00d7"+v.videoHeight]]);$("#to-step-2").disabled=false;};v.src=S.videoURL;}
+function handleVideo(file){if(!file)return;if(S.videoURL)URL.revokeObjectURL(S.videoURL);S.videoFile=file;S.videoURL=URL.createObjectURL(file);const v=document.createElement("video");v.preload="metadata";v.onloadedmetadata=()=>{S.videoDuration=v.duration;infoGrid("#video-info",[["File",file.name],["Size",fmtBytes(file.size)],["Duration",fmtTime(v.duration)],["Resolution",v.videoWidth+"\u00d7"+v.videoHeight]]);$("#to-step-2").disabled=false;};v.onerror=()=>{S.videoDuration=0;infoGrid("#video-info",[["File",file.name],["Size",fmtBytes(file.size)],["Duration","\u2014"],["Note","Preview unavailable, but you can continue"]]);$("#to-step-2").disabled=false;};v.src=S.videoURL;}
 
 /* ================= STEP 2: TRANSCRIPT ================= */
 function parseTSTime(s){const m=s.match(/(\d+):(\d+):(\d+)[,\.](\d+)/);if(!m)return 0;return+m[1]*3600+ +m[2]*60+ +m[3]+ +m[4]/1000;}
@@ -64,16 +71,18 @@ function parseSRT(t){const out=[];for(const blk of t.trim().split(/\n\n+/)){cons
 function alignTXT(text,dur){const sents=(text.match(/[^.!?]+[.!?]+/g)||[text]).map(s=>s.trim()).filter(Boolean);const words=text.split(/\s+/).filter(Boolean).length;const wps=Math.max(words/Math.max(dur,1),0.5);const out=[];let t=0;for(const s of sents){const w=s.split(/\s+/).filter(Boolean).length;const d=Math.max(w/wps,0.5);out.push({start:t,end:Math.min(t+d,dur),text:s});t+=d;}return out;}
 function handleTranscript(fname,text){showAlert("");const t=text.trim();if(t.length<10){showAlert("Transcript is too short.");return;}let sents=[];if(/-->/.test(t)){sents=t.startsWith("WEBVTT")?parseSRT(t.replace(/^WEBVTT[^\n]*\n/,"\n")):parseSRT(t);}else sents=alignTXT(t,S.videoDuration||3600);if(!sents.length){showAlert("Could not parse transcript. Check the format.");return;}S.sentences=sents;manualReady=true;const wc=sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);const timed=/-->/.test(t);infoGrid("#tr-info",[["Format",timed?"SRT/VTT (timed)":"TXT (estimated)"],["Words",String(wc)],["Sentences",String(sents.length)],["Cover",fmtTime(sents[0].start)+" \u2013 "+fmtTime(sents[sents.length-1].end)]]);}
 
-/* ---- AI Auto-Transcribe (Deepgram) with approximate % progress ---- */
+/* ---- AI Auto-Transcribe (Deepgram) — progress messages contain NO percentages; the UI shows the % once ---- */
 const DEEPGRAM_API_KEY="60b4a66f441c27464b94570702c75acd1ebf2f6f";
 async function decodeAudioBuffer(file,onTick){
-  onTick&&onTick(6,"Reading video file\u2026");
+  onTick&&onTick(6,"Reading video file");
   const ab=await file.arrayBuffer();
-  onTick&&onTick(14,"Opening audio decoder\u2026");
-  const ctx=new(window.AudioContext||window.webkitAudioContext)();
-  onTick&&onTick(22,"Decoding audio track\u2026");
-  const audio=await ctx.decodeAudioData(ab);
-  await ctx.close();
+  onTick&&onTick(14,"Opening audio decoder");
+  const Ctx=window.AudioContext||window.webkitAudioContext;
+  const ctx=new Ctx();
+  try{if(ctx.state==="suspended")await ctx.resume();}catch(e){}
+  onTick&&onTick(22,"Decoding audio track");
+  const audio=await new Promise((res,rej)=>{const p=ctx.decodeAudioData(ab,res,rej);if(p&&p.then)p.then(res).catch(rej);});
+  try{await ctx.close();}catch(e){}
   onTick&&onTick(32,"Audio decoded");
   return audio;}
 async function resampleTo16kMono(buffer,onTick){
@@ -82,15 +91,14 @@ async function resampleTo16kMono(buffer,onTick){
   const frames=Math.max(1,Math.ceil(buffer.duration*targetRate));
   const offline=new OfflineCtx(1,frames,targetRate);
   const src=offline.createBufferSource();src.buffer=buffer;src.connect(offline.destination);src.start(0);
-  onTick&&onTick(38,"Resampling to 16kHz mono\u2026");
-  /* Fake smooth progress while offline render runs (no native progress API) */
+  onTick&&onTick(38,"Preparing audio for the AI");
   let fake=38;let alive=true;
-  const pulse=setInterval(()=>{if(!alive)return;fake=Math.min(54,fake+1.2);onTick&&onTick(fake,fake<48?"Resampling audio\u2026":"Halfway there \u2014 still preparing\u2026");},280);
-  try{const out=await offline.startRendering();alive=false;clearInterval(pulse);onTick&&onTick(56,"Resample complete");return out;}
+  const pulse=setInterval(()=>{if(!alive)return;fake=Math.min(54,fake+1.2);onTick&&onTick(fake,"Preparing audio for the AI");},280);
+  try{const out=await offline.startRendering();alive=false;clearInterval(pulse);onTick&&onTick(56,"Audio prepared");return out;}
   catch(e){alive=false;clearInterval(pulse);throw e;}}
 function floatTo16BitPCM(float32){const buf=new ArrayBuffer(float32.length*2);const view=new DataView(buf);let offset=0;for(let i=0;i<float32.length;i++,offset+=2){let s=Math.max(-1,Math.min(1,float32[i]));view.setInt16(offset,s<0?s*0x8000:s*0x7FFF,true);}return buf;}
 function encodeWav(buffer,onTick){
-  onTick&&onTick(60,"Encoding WAV\u2026");
+  onTick&&onTick(60,"Packaging audio");
   const numChannels=1,sampleRate=buffer.sampleRate;const samples=buffer.getChannelData(0);const pcm=floatTo16BitPCM(samples);
   const blockAlign=numChannels*2,byteRate=sampleRate*blockAlign,dataSize=pcm.byteLength,headerSize=44;
   const wavBuf=new ArrayBuffer(headerSize+dataSize);const view=new DataView(wavBuf);
@@ -100,7 +108,7 @@ function encodeWav(buffer,onTick){
   view.setUint32(24,sampleRate,true);view.setUint32(28,byteRate,true);view.setUint16(32,blockAlign,true);view.setUint16(34,16,true);
   writeStr(36,"data");view.setUint32(40,dataSize,true);
   new Uint8Array(wavBuf,headerSize).set(new Uint8Array(pcm));
-  onTick&&onTick(66,"Audio ready for AI");
+  onTick&&onTick(66,"Audio ready for the AI");
   return new Blob([wavBuf],{type:"audio/wav"});}
 function postDeepgram(wavBlob,onTick){
   return new Promise((resolve,reject)=>{
@@ -110,19 +118,16 @@ function postDeepgram(wavBlob,onTick){
     xhr.setRequestHeader("Authorization","Token "+DEEPGRAM_API_KEY);
     xhr.setRequestHeader("Content-Type","audio/wav");
     xhr.upload.onprogress=e=>{
-      if(e.lengthComputable&&e.total>0){
-        const up=e.loaded/e.total;
-        const pct=66+up*16; /* 66 → 82 */
-        onTick&&onTick(pct,up<0.95?("Uploading to AI \u2014 "+Math.round(up*100)+"%"):"Upload almost done\u2026");
-      }else onTick&&onTick(72,"Uploading to speech AI\u2026");
+      if(e.lengthComputable&&e.total>0){const up=e.loaded/e.total;onTick&&onTick(66+up*16,"Uploading to the speech AI");}
+      else onTick&&onTick(72,"Uploading to the speech AI");
     };
-    xhr.upload.onload=()=>onTick&&onTick(84,"AI is listening\u2026 almost there");
-    let think=84;const thinkTimer=setInterval(()=>{think=Math.min(94,think+0.6);onTick&&onTick(think,think<90?"AI is listening\u2026":"Almost there \u2014 wrapping up\u2026");},400);
+    xhr.upload.onload=()=>onTick&&onTick(84,"AI is listening");
+    let think=84;const thinkTimer=setInterval(()=>{think=Math.min(94,think+0.6);onTick&&onTick(think,"AI is listening");},400);
     xhr.onreadystatechange=()=>{
       if(xhr.readyState===4){
         clearInterval(thinkTimer);
         if(xhr.status>=200&&xhr.status<300){
-          onTick&&onTick(96,"Building timed script\u2026");
+          onTick&&onTick(96,"Building your timed script");
           try{resolve(JSON.parse(xhr.responseText));}catch(e){reject(new Error("Bad AI response"));}
         }else{
           const extra=(xhr.responseText||"").slice(0,180);
@@ -131,18 +136,17 @@ function postDeepgram(wavBlob,onTick){
       }
     };
     xhr.onerror=()=>{clearInterval(thinkTimer);reject(new Error("Network error talking to AI"));};
-    onTick&&onTick(68,"Starting upload to speech AI\u2026");
+    onTick&&onTick(68,"Uploading to the speech AI");
     xhr.send(wavBlob);
   });}
 async function transcribeWithDeepgram(file,onStatus){
-  /* onStatus(message, percent 0-100) */
   const tick=(pct,msg)=>{const p=Math.round(Math.min(100,Math.max(0,pct)));onStatus&&onStatus(msg,p);};
-  tick(3,"Starting AI transcription\u2026");
-  const decoded=await decodeAudioBuffer(file,tick);
-  const mono16k=await resampleTo16kMono(decoded,tick);
-  const wavBlob=encodeWav(mono16k,tick);
-  const data=await postDeepgram(wavBlob,tick);
-  tick(97,"Parsing transcript\u2026");
+  tick(3,"Starting AI transcription");
+  const decoded=await decodeAudioBuffer(file,(p,m)=>tick(p,m));
+  const mono16k=await resampleTo16kMono(decoded,(p,m)=>tick(p,m));
+  const wavBlob=encodeWav(mono16k,(p,m)=>tick(p,m));
+  const data=await postDeepgram(wavBlob,(p,m)=>tick(p,m));
+  tick(97,"Parsing transcript");
   const utter=data&&data.results&&data.results.utterances;
   let sents=[];
   if(utter&&utter.length)sents=utter.map(u=>({start:u.start,end:u.end,text:(u.transcript||"").trim()})).filter(s=>s.text);
@@ -151,7 +155,7 @@ async function transcribeWithDeepgram(file,onStatus){
     const words=(alt&&alt.words)||[];
     if(words.length){let cur=[];for(const w of words){cur.push(w);const pw=w.punctuated_word||w.word||"";if(/[.!?]$/.test(pw)||cur.length>28){sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});cur=[];}}if(cur.length)sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});}
   }
-  tick(100,"Done!");
+  tick(100,"Done");
   return sents;}
 
 /* ================= STEP 3: OPTIONS ================= */
