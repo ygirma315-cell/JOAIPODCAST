@@ -27,6 +27,7 @@ async function generate(){goStep(4);initStages();const bar=$("#job-bar");const t
   setStage("score","done");setBar(74,"Scored");
   setStage("select","active");setBar(76,"Choosing the single best part");await sleep(100);
   const sentScore=computeSentenceScores(S.sentences,corpus,S.audioEnergy,S.audioStats);
+  S._sentScore=sentScore;
   let picked;
   if(typeof pickBestSingleClip==="function"){picked=pickBestSingleClip(scored,S.sentences,sentScore,target);}
   else{picked=selectTop(scored,1);buildMomentCuts(picked,S.sentences,sentScore,target);picked=picked.filter(p=>p.cuts&&p.cuts.length);}
@@ -34,8 +35,20 @@ async function generate(){goStep(4);initStages();const bar=$("#job-bar");const t
   setStage("refine","active");setBar(90,"Keeping length between "+fmtTime(win.minS)+" \u2013 "+fmtTime(win.maxS));
   setStage("refine","done");setBar(100,"Done! Starting render");
   S.candidates=scored;S.selected=picked.filter(p=>p.cuts&&p.cuts.length);
+  S._used=S.selected.length?[[S.selected[0].sentLo,S.selected[0].sentHi]]:[];
   if(!S.selected.length){showAlert("No strong clip found near that length. Try another duration or a longer transcript.");goStep(3);return;}
   await sleep(350);startRender();}
+
+/* ================= ANOTHER PART (next-best different moment) ================= */
+function pickAnotherPart(){
+  if(!S.candidates||!S.candidates.length||!S._sentScore){return null;}
+  const used=S._used||[];
+  const overlaps=c=>used.some(u=>!(c.sentHi<u[0]||u[1]<c.sentLo));
+  const pool=S.candidates.filter(c=>!overlaps(c));
+  if(!pool.length)return null;
+  const picked=(typeof pickBestSingleClip==="function")?pickBestSingleClip(pool,S.sentences,S._sentScore,S.opts.target_s||120):[];
+  if(!picked.length||!picked[0].cuts||!picked[0].cuts.length)return null;
+  return picked;}
 
 /* ================= STEP 5: RENDER ================= */
 async function startRender(){goStep(5);
@@ -51,6 +64,17 @@ async function startRender(){goStep(5);
   exportClips();}
 function waitMeta(p){return new Promise(r=>{if(p.readyState>=1&&p.videoWidth)return r();const done=()=>{p.removeEventListener("loadedmetadata",done);p.removeEventListener("loadeddata",done);r();};p.addEventListener("loadedmetadata",done);p.addEventListener("loadeddata",done);setTimeout(done,8000);});}
 function seekTo(p,t){return new Promise(resolve=>{const target=Math.max(0,Math.min(t,(p.duration||t)-0.05));if(Math.abs((p.currentTime||0)-target)<0.05&&p.readyState>=2){resolve();return;}let settled=false;const finish=()=>{if(settled)return;settled=true;p.removeEventListener("seeked",onSeek);p.removeEventListener("loadeddata",onSeek);clearTimeout(to);resolve();};const onSeek=()=>finish();p.addEventListener("seeked",onSeek);p.addEventListener("loadeddata",onSeek);try{p.pause();}catch(e){}try{p.currentTime=target;}catch(e){finish();return;}const to=setTimeout(finish,2500);});}
+
+/* ================= SPEAKER AUTO-FOCUS (face tracking) ================= */
+const FOCUS={x:0.5,tx:0.5,det:null,busy:false,last:0,enabled:false};
+function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.busy=false;FOCUS.last=0;FOCUS.det=null;FOCUS.enabled=false;
+  try{if(opt.focus!==false&&("FaceDetector" in window)){FOCUS.det=new window.FaceDetector({fastMode:true,maxDetectedFaces:4});FOCUS.enabled=true;}}catch(e){FOCUS.det=null;FOCUS.enabled=false;}}
+function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const now=performance.now();if(now-FOCUS.last<350)return;FOCUS.last=now;FOCUS.busy=true;
+  FOCUS.det.detect(p).then(faces=>{FOCUS.busy=false;if(!faces||!faces.length)return;
+    let best=faces[0];for(const f of faces){if(f.boundingBox.width>best.boundingBox.width)best=f;}
+    const vw=p.videoWidth||1;const cx=(best.boundingBox.x+best.boundingBox.width/2)/vw;
+    if(isFinite(cx))FOCUS.tx=Math.min(0.92,Math.max(0.08,cx));
+  }).catch(()=>{FOCUS.busy=false;});}
 
 /* ================= CAPTIONS ================= */
 const CAP_MAX_WORDS=6;
@@ -71,6 +95,7 @@ async function exportClips(){if(S.exporting)return;
   $("#export-log").textContent="Preparing renderer\u2026";
   const p=$("#player");p.muted=true;p.volume=0;p.playbackRate=1;p.playsInline=true;
   if(!p.src||p.src!==S.videoURL){p.src=S.videoURL;p.load();}await waitMeta(p);
+  setupFocus(opt);
   let cw=1080,ch=1920;if(opt.aspect==="1:1"){cw=1080;ch=1080;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
   const fps=30;const stream=canvas.captureStream(fps);
@@ -81,13 +106,17 @@ async function exportClips(){if(S.exporting)return;
   ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);if(rec.state==="inactive")rec.start(200);await sleep(120);
   const planned=moments.reduce((n,m)=>n+(m.cutDuration||0),0)||1;let rendered=0;const F=0.35,CUTPOP=0.12;
   const totalCutsAll=moments.reduce((n,m)=>n+m.cuts.length,0);let cutIndex=0;
-  function drawFrame(srcT,cut,mi,ci,cutT,cutDur){const vw=p.videoWidth||cw,vh=p.videoHeight||ch;let cr=cropRect(vw,vh,cw,ch);if(opt.zoom){const zp=Math.min(Math.max(cutT/Math.max(cutDur,0.01),0),1);const z=1+0.06*zp;const sw2=cr.sw/z,sh2=cr.sh/z;cr={sx:cr.sx+(cr.sw-sw2)/2,sy:cr.sy+(cr.sh-sh2)/2,sw:sw2,sh:sh2};}if(cutT<CUTPOP&&!(mi===0&&ci===0)){const pz=1+0.05*(1-cutT/CUTPOP);const sw3=cr.sw/pz,sh3=cr.sh/pz;cr={sx:cr.sx+(cr.sw-sw3)/2,sy:cr.sy+(cr.sh-sh3)/2,sw:sw3,sh:sh3};}ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);try{if(p.videoWidth)ctx.drawImage(p,cr.sx,cr.sy,cr.sw,cr.sh,0,0,cw,ch);}catch(e){}drawCaption(ctx,cw,ch,srcT,opt);if(opt.watermark)drawWM(ctx,cw,ch,opt.wmText);if(opt.fades){let a=0;if(ci===0){if(cutT<F)a=Math.max(a,1-cutT/F);}if(ci===(moments[mi].cuts.length-1)){const tOut=cutDur-cutT;if(tOut<F)a=Math.max(a,1-tOut/F);}if(a>0){ctx.fillStyle="rgba(0,0,0,"+Math.min(Math.max(a,0),1).toFixed(3)+")";ctx.fillRect(0,0,cw,ch);}}}
+  function drawFrame(srcT,cut,mi,ci,cutT,cutDur){const vw=p.videoWidth||cw,vh=p.videoHeight||ch;let cr=cropRect(vw,vh,cw,ch);
+    if(FOCUS.enabled&&cr.sw<vw-1){const desired=FOCUS.x*vw-cr.sw/2;cr.sx=Math.min(Math.max(desired,0),vw-cr.sw);}
+    if(opt.zoom){const zp=Math.min(Math.max(cutT/Math.max(cutDur,0.01),0),1);const z=1+0.06*zp;const sw2=cr.sw/z,sh2=cr.sh/z;cr={sx:cr.sx+(cr.sw-sw2)/2,sy:cr.sy+(cr.sh-sh2)/2,sw:sw2,sh:sh2};}
+    if(cutT<CUTPOP&&!(mi===0&&ci===0)){const pz=1+0.05*(1-cutT/CUTPOP);const sw3=cr.sw/pz,sh3=cr.sh/pz;cr={sx:cr.sx+(cr.sw-sw3)/2,sy:cr.sy+(cr.sh-sh3)/2,sw:sw3,sh:sh3};}
+    ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);try{if(p.videoWidth)ctx.drawImage(p,cr.sx,cr.sy,cr.sw,cr.sh,0,0,cw,ch);}catch(e){}drawCaption(ctx,cw,ch,srcT,opt);if(opt.watermark)drawWM(ctx,cw,ch,opt.wmText);if(opt.fades){let a=0;if(ci===0){if(cutT<F)a=Math.max(a,1-cutT/F);}if(ci===(moments[mi].cuts.length-1)){const tOut=cutDur-cutT;if(tOut<F)a=Math.max(a,1-tOut/F);}if(a>0){ctx.fillStyle="rgba(0,0,0,"+Math.min(Math.max(a,0),1).toFixed(3)+")";ctx.fillRect(0,0,cw,ch);}}}
   for(let mi=0;mi<moments.length&&!S.cancelExport;mi++){const moment=moments[mi];const cuts=moment.cuts;
     for(let ci=0;ci<cuts.length&&!S.cancelExport;ci++){const cut=cuts[ci];cutIndex++;const cutDur=Math.max(cut.ce-cut.cs,0.2);
       $("#export-log").textContent="\ud83c\udfac Rendering cut "+cutIndex+"/"+totalCutsAll+" \u00b7 "+fmtTime(rendered)+" / "+fmtTime(planned);
-      await seekTo(p,cut.cs);try{p.muted=true;p.volume=0;await p.play();}catch(e){}
+      await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;try{p.muted=true;p.volume=0;await p.play();}catch(e){}
       const t0=performance.now();let lastVidT=p.currentTime;let stuckMs=0;
-      await new Promise(resolve=>{function tick(){if(S.cancelExport){resolve();return;}const wall=(performance.now()-t0)/1000;let vidT=p.currentTime;if(Math.abs(vidT-lastVidT)<0.001){stuckMs+=1000/fps;}else{stuckMs=0;lastVidT=vidT;}if(stuckMs>900){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;stuckMs=0;}const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);const cutT=Math.min(Math.max(srcT-cut.cs,wall),cutDur);drawFrame(srcT,cut,mi,ci,cutT,cutDur);const prog=(rendered+Math.min(cutT,cutDur))/planned*100;const pct=Math.min(Math.round(prog),99);$("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";const doneByVid=vidT>=cut.ce-0.04;const doneByWall=wall>=cutDur;const ended=p.ended&&vidT>=cut.ce-0.5;if(doneByVid||doneByWall||ended){resolve();return;}requestAnimationFrame(tick);}requestAnimationFrame(tick);});
+      await new Promise(resolve=>{function tick(){if(S.cancelExport){resolve();return;}updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.10;const wall=(performance.now()-t0)/1000;let vidT=p.currentTime;if(Math.abs(vidT-lastVidT)<0.001){stuckMs+=1000/fps;}else{stuckMs=0;lastVidT=vidT;}if(stuckMs>900){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;stuckMs=0;}const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);const cutT=Math.min(Math.max(srcT-cut.cs,wall),cutDur);drawFrame(srcT,cut,mi,ci,cutT,cutDur);const prog=(rendered+Math.min(cutT,cutDur))/planned*100;const pct=Math.min(Math.round(prog),99);$("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";const doneByVid=vidT>=cut.ce-0.04;const doneByWall=wall>=cutDur;const ended=p.ended&&vidT>=cut.ce-0.5;if(doneByVid||doneByWall||ended){resolve();return;}requestAnimationFrame(tick);}requestAnimationFrame(tick);});
       try{p.pause();}catch(e){}rendered+=cutDur;}}
   if(!S.cancelExport){const holdEnd=performance.now()+250;while(performance.now()<holdEnd){await sleep(40);}}
   try{if(rec.state==="recording"){rec.requestData&&rec.requestData();rec.stop();}}catch(e){}await stopped;await sleep(80);
@@ -105,7 +134,7 @@ async function exportClips(){if(S.exporting)return;
   await new Promise(r=>{const ok=()=>{fp.removeEventListener("canplay",ok);fp.removeEventListener("loadeddata",ok);clearTimeout(t);r();};fp.addEventListener("canplay",ok);fp.addEventListener("loadeddata",ok);const t=setTimeout(ok,4000);});
   try{fp.currentTime=0;await fp.play();}catch(e){}}
 
-/* ================= AI progress UI helper ================= */
+/* ================= AI progress UI helper (percentage shown in ONE place only) ================= */
 function setAiProgress(msg,pct){
   const st=$("#ai-status"),bar=$("#ai-bar"),lab=$("#ai-pct"),wrap=$("#ai-prog");
   if(wrap)wrap.classList.add("show");
@@ -113,12 +142,10 @@ function setAiProgress(msg,pct){
   if(bar)bar.style.width=p+"%";
   if(lab)lab.textContent=p+"%";
   if(st){
-    let line=msg||"Working\u2026";
-    if(p>=100)line="\u2713 "+line;
-    else if(p>=90)line="\u23f3 "+line+" \u2014 almost there!";
-    else if(p>=70)line="\u23f3 "+line;
-    else line="\u23f3 "+line;
-    st.textContent=line+" ("+p+"%)";
+    const line=msg||"Working";
+    if(p>=100)st.textContent="\u2705 "+line;
+    else if(p>=88)st.textContent="\u23f3 Almost there \u2014 "+line+"\u2026";
+    else st.textContent="\u23f3 "+line+"\u2026";
   }
 }
 
@@ -129,6 +156,10 @@ function boot(){
   bindDrop("#tr-drop","#tr-input",f=>{const rd=new FileReader();rd.onload=()=>handleTranscript(f.name,String(rd.result||""));rd.readAsText(f);});
   let deb;const trText=$("#tr-text");
   if(trText)trText.addEventListener("input",()=>{clearTimeout(deb);deb=setTimeout(()=>{const t=trText.value.trim();if(t.length>10)handleTranscript(null,t);},700);});
+
+  /* Manual transcript hidden by default — toggle to reveal */
+  const sm=$("#show-manual"),mb=$("#manual-box");
+  if(sm&&mb)sm.addEventListener("click",()=>{mb.hidden=!mb.hidden;sm.textContent=mb.hidden?"\u270f\ufe0f Have your own transcript? Paste it manually":"\u2715 Hide manual transcript";if(!mb.hidden)mb.scrollIntoView({block:"nearest",behavior:"smooth"});});
 
   $("#use-manual").addEventListener("click",()=>{
     const t=($("#tr-text").value||"").trim();
@@ -141,7 +172,7 @@ function boot(){
     const btn=$("#ai-transcribe"),useBtn=$("#use-ai"),wrap=$("#ai-prog");
     btn.disabled=true;if(useBtn)useBtn.style.display="none";
     if(wrap)wrap.classList.add("show");
-    setAiProgress("Starting\u2026",2);
+    setAiProgress("Starting",2);
     try{
       const sents=await transcribeWithDeepgram(S.videoFile,(msg,pct)=>setAiProgress(msg,pct));
       if(!sents.length){setAiProgress("No speech detected \u2014 try Manual instead",100);btn.disabled=false;return;}
@@ -149,11 +180,11 @@ function boot(){
       const wc=sents.reduce((n,s)=>n+s.text.split(/\s+/).filter(Boolean).length,0);
       infoGrid("#tr-info",[["Source","AI Speech-to-Text"],["Words",String(wc)],["Lines",String(sents.length)],["Cover",fmtTime(sents[0].start)+" \u2013 "+fmtTime(sents[sents.length-1].end)]]);
       setAiProgress("Transcribed successfully",100);
-      if(useBtn)useBtn.style.display="block";
+      if(useBtn){useBtn.style.display="block";useBtn.scrollIntoView({block:"nearest",behavior:"smooth"});}
     }catch(e){
       console.warn(e);
-      setAiProgress("AI failed ("+(e&&e.message?e.message:"error")+") \u2014 use Manual",0);
-      const st=$("#ai-status");if(st)st.textContent="\u26a0 AI failed ("+(e&&e.message?e.message:"error")+") \u2014 use Manual instead.";
+      const wrap2=$("#ai-prog");if(wrap2)wrap2.classList.remove("show");
+      const st=$("#ai-status");if(st)st.textContent="\u26a0 AI failed ("+(e&&e.message?e.message:"error")+"). On phones, very long videos can run out of memory \u2014 try a shorter video or the Manual option below.";
     }
     btn.disabled=false;});
   $("#use-ai").addEventListener("click",()=>{if(S.sentences.length&&aiReady)goStep(3);});
@@ -166,7 +197,16 @@ function boot(){
     generate();});
   $("#cancel-export").addEventListener("click",()=>{S.cancelExport=true;});
   $("#render-again").addEventListener("click",()=>{if(!S.exporting)startRender();});
+  const ro=$("#render-other");
+  if(ro)ro.addEventListener("click",()=>{
+    if(S.exporting)return;
+    const picked=pickAnotherPart();
+    if(!picked){showAlert("Couldn't find another distinct part at this length \u2014 try a shorter length in Style, or Start over.");return;}
+    S._used=(S._used||[]).concat([[picked[0].sentLo,picked[0].sentHi]]);
+    S.selected=picked;
+    startRender();});
   $("#start-over").addEventListener("click",()=>location.reload());
+  const of=$("#opt-focus");if(of)of.addEventListener("change",e=>S.opts.focus=e.target.checked);
   $("#colors-reset").addEventListener("click",()=>{$("#opt-color-text").value="#FFFF00";$("#opt-color-hl").value="#FFFFFF";S.opts.colorText="#FFFF00";S.opts.colorHl="#FFFFFF";});
   $("#opt-color-text").addEventListener("input",e=>S.opts.colorText=e.target.value);
   $("#opt-color-hl").addEventListener("input",e=>S.opts.colorHl=e.target.value);
