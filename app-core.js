@@ -71,8 +71,13 @@ function parseSRT(t){const out=[];for(const blk of t.trim().split(/\n\n+/)){cons
 function alignTXT(text,dur){const sents=(text.match(/[^.!?]+[.!?]+/g)||[text]).map(s=>s.trim()).filter(Boolean);const words=text.split(/\s+/).filter(Boolean).length;const wps=Math.max(words/Math.max(dur,1),0.5);const out=[];let t=0;for(const s of sents){const w=s.split(/\s+/).filter(Boolean).length;const d=Math.max(w/wps,0.5);out.push({start:t,end:Math.min(t+d,dur),text:s});t+=d;}return out;}
 function handleTranscript(fname,text){showAlert("");const t=text.trim();if(t.length<10){showAlert("Transcript is too short.");return;}let sents=[];if(/-->/.test(t)){sents=t.startsWith("WEBVTT")?parseSRT(t.replace(/^WEBVTT[^\n]*\n/,"\n")):parseSRT(t);}else sents=alignTXT(t,S.videoDuration||3600);if(!sents.length){showAlert("Could not parse transcript. Check the format.");return;}S.sentences=sents;manualReady=true;const wc=sents.reduce((n,s)=>n+s.text.split(/\s+/).length,0);const timed=/-->/.test(t);infoGrid("#tr-info",[["Format",timed?"SRT/VTT (timed)":"TXT (estimated)"],["Words",String(wc)],["Sentences",String(sents.length)],["Cover",fmtTime(sents[0].start)+" \u2013 "+fmtTime(sents[sents.length-1].end)]]);}
 
-/* ---- AI Auto-Transcribe (Deepgram) — progress messages contain NO percentages; the UI shows the % once ---- */
+/* ---- AI Auto-Transcribe (Deepgram) ----
+   FAST PATH: the original video file is uploaded straight to Deepgram (it extracts the
+   audio on its servers) — ZERO in-browser decoding, so the page never lags.
+   FALLBACK (very large files only): decode + resample locally, with all heavy loops
+   chunked and yielding to the browser so the UI stays responsive. */
 const DEEPGRAM_API_KEY="60b4a66f441c27464b94570702c75acd1ebf2f6f";
+const DEEPGRAM_RAW_LIMIT=250*1024*1024; /* files up to 250 MB go straight to the AI */
 async function decodeAudioBuffer(file,onTick){
   onTick&&onTick(6,"Reading video file");
   const ab=await file.arrayBuffer();
@@ -80,10 +85,10 @@ async function decodeAudioBuffer(file,onTick){
   const Ctx=window.AudioContext||window.webkitAudioContext;
   const ctx=new Ctx();
   try{if(ctx.state==="suspended")await ctx.resume();}catch(e){}
-  onTick&&onTick(22,"Decoding audio track");
+  onTick&&onTick(20,"Decoding audio track");
   const audio=await new Promise((res,rej)=>{const p=ctx.decodeAudioData(ab,res,rej);if(p&&p.then)p.then(res).catch(rej);});
   try{await ctx.close();}catch(e){}
-  onTick&&onTick(32,"Audio decoded");
+  onTick&&onTick(30,"Audio decoded");
   return audio;}
 async function resampleTo16kMono(buffer,onTick){
   const targetRate=16000;
@@ -91,15 +96,28 @@ async function resampleTo16kMono(buffer,onTick){
   const frames=Math.max(1,Math.ceil(buffer.duration*targetRate));
   const offline=new OfflineCtx(1,frames,targetRate);
   const src=offline.createBufferSource();src.buffer=buffer;src.connect(offline.destination);src.start(0);
-  onTick&&onTick(38,"Preparing audio for the AI");
-  let fake=38;let alive=true;
-  const pulse=setInterval(()=>{if(!alive)return;fake=Math.min(54,fake+1.2);onTick&&onTick(fake,"Preparing audio for the AI");},280);
-  try{const out=await offline.startRendering();alive=false;clearInterval(pulse);onTick&&onTick(56,"Audio prepared");return out;}
+  onTick&&onTick(34,"Preparing audio for the AI");
+  let fake=34;let alive=true;
+  const pulse=setInterval(()=>{if(!alive)return;fake=Math.min(52,fake+1.2);onTick&&onTick(fake,"Preparing audio for the AI");},280);
+  try{const out=await offline.startRendering();alive=false;clearInterval(pulse);onTick&&onTick(54,"Audio prepared");return out;}
   catch(e){alive=false;clearInterval(pulse);throw e;}}
-function floatTo16BitPCM(float32){const buf=new ArrayBuffer(float32.length*2);const view=new DataView(buf);let offset=0;for(let i=0;i<float32.length;i++,offset+=2){let s=Math.max(-1,Math.min(1,float32[i]));view.setInt16(offset,s<0?s*0x8000:s*0x7FFF,true);}return buf;}
-function encodeWav(buffer,onTick){
-  onTick&&onTick(60,"Packaging audio");
-  const numChannels=1,sampleRate=buffer.sampleRate;const samples=buffer.getChannelData(0);const pcm=floatTo16BitPCM(samples);
+/* Chunked + yielding: converts samples in ~1.5M-sample slices with a break between each,
+   so the main thread (buttons, scrolling, progress bar) never freezes. */
+async function floatTo16BitPCM(float32,onProg){
+  const buf=new ArrayBuffer(float32.length*2);const view=new DataView(buf);
+  const CH=1500000;
+  for(let s0=0;s0<float32.length;s0+=CH){
+    const e0=Math.min(s0+CH,float32.length);
+    let off=s0*2;
+    for(let i=s0;i<e0;i++,off+=2){let s=Math.max(-1,Math.min(1,float32[i]));view.setInt16(off,s<0?s*0x8000:s*0x7FFF,true);}
+    onProg&&onProg(e0/float32.length);
+    if(e0<float32.length)await new Promise(r=>setTimeout(r,0));
+  }
+  return buf;}
+async function encodeWav(buffer,onTick){
+  onTick&&onTick(56,"Packaging audio");
+  const numChannels=1,sampleRate=buffer.sampleRate;const samples=buffer.getChannelData(0);
+  const pcm=await floatTo16BitPCM(samples,fr=>onTick&&onTick(56+fr*8,"Packaging audio"));
   const blockAlign=numChannels*2,byteRate=sampleRate*blockAlign,dataSize=pcm.byteLength,headerSize=44;
   const wavBuf=new ArrayBuffer(headerSize+dataSize);const view=new DataView(wavBuf);
   function writeStr(off,str){for(let i=0;i<str.length;i++)view.setUint8(off+i,str.charCodeAt(i));}
@@ -110,16 +128,17 @@ function encodeWav(buffer,onTick){
   new Uint8Array(wavBuf,headerSize).set(new Uint8Array(pcm));
   onTick&&onTick(66,"Audio ready for the AI");
   return new Blob([wavBuf],{type:"audio/wav"});}
-function postDeepgram(wavBlob,onTick){
+function postDeepgram(body,onTick,contentType,pctFrom,pctTo){
   return new Promise((resolve,reject)=>{
     const url="https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&utterances=true&language=en";
+    const a=pctFrom==null?66:pctFrom,b=pctTo==null?82:pctTo;
     const xhr=new XMLHttpRequest();
     xhr.open("POST",url,true);
     xhr.setRequestHeader("Authorization","Token "+DEEPGRAM_API_KEY);
-    xhr.setRequestHeader("Content-Type","audio/wav");
+    xhr.setRequestHeader("Content-Type",contentType||"audio/wav");
     xhr.upload.onprogress=e=>{
-      if(e.lengthComputable&&e.total>0){const up=e.loaded/e.total;onTick&&onTick(66+up*16,"Uploading to the speech AI");}
-      else onTick&&onTick(72,"Uploading to the speech AI");
+      if(e.lengthComputable&&e.total>0){const up=e.loaded/e.total;onTick&&onTick(a+up*(b-a),"Uploading to the speech AI");}
+      else onTick&&onTick((a+b)/2,"Uploading to the speech AI");
     };
     xhr.upload.onload=()=>onTick&&onTick(84,"AI is listening");
     let think=84;const thinkTimer=setInterval(()=>{think=Math.min(94,think+0.6);onTick&&onTick(think,"AI is listening");},400);
@@ -136,17 +155,10 @@ function postDeepgram(wavBlob,onTick){
       }
     };
     xhr.onerror=()=>{clearInterval(thinkTimer);reject(new Error("Network error talking to AI"));};
-    onTick&&onTick(68,"Uploading to the speech AI");
-    xhr.send(wavBlob);
+    onTick&&onTick(a,"Uploading to the speech AI");
+    xhr.send(body);
   });}
-async function transcribeWithDeepgram(file,onStatus){
-  const tick=(pct,msg)=>{const p=Math.round(Math.min(100,Math.max(0,pct)));onStatus&&onStatus(msg,p);};
-  tick(3,"Starting AI transcription");
-  const decoded=await decodeAudioBuffer(file,(p,m)=>tick(p,m));
-  const mono16k=await resampleTo16kMono(decoded,(p,m)=>tick(p,m));
-  const wavBlob=encodeWav(mono16k,(p,m)=>tick(p,m));
-  const data=await postDeepgram(wavBlob,(p,m)=>tick(p,m));
-  tick(97,"Parsing transcript");
+function parseDeepgramResult(data){
   const utter=data&&data.results&&data.results.utterances;
   let sents=[];
   if(utter&&utter.length)sents=utter.map(u=>({start:u.start,end:u.end,text:(u.transcript||"").trim()})).filter(s=>s.text);
@@ -155,6 +167,25 @@ async function transcribeWithDeepgram(file,onStatus){
     const words=(alt&&alt.words)||[];
     if(words.length){let cur=[];for(const w of words){cur.push(w);const pw=w.punctuated_word||w.word||"";if(/[.!?]$/.test(pw)||cur.length>28){sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});cur=[];}}if(cur.length)sents.push({start:cur[0].start,end:cur[cur.length-1].end,text:cur.map(x=>x.punctuated_word||x.word).join(" ")});}
   }
+  return sents;}
+async function transcribeWithDeepgram(file,onStatus){
+  const tick=(pct,msg)=>{const p=Math.round(Math.min(100,Math.max(0,pct)));onStatus&&onStatus(msg,p);};
+  tick(2,"Starting AI transcription");
+  let data;
+  if(file.size<=DEEPGRAM_RAW_LIMIT){
+    /* FAST PATH — no in-browser decoding at all, so nothing can lag */
+    tick(4,"Sending your video to the speech AI");
+    data=await postDeepgram(file,(p,m)=>tick(p,m),file.type||"application/octet-stream",5,82);
+  }else{
+    /* Very large file — shrink it to lightweight audio locally (chunked, non-blocking) */
+    tick(4,"Large file \u2014 extracting audio first");
+    const decoded=await decodeAudioBuffer(file,(p,m)=>tick(p,m));
+    const mono16k=await resampleTo16kMono(decoded,(p,m)=>tick(p,m));
+    const wavBlob=await encodeWav(mono16k,(p,m)=>tick(p,m));
+    data=await postDeepgram(wavBlob,(p,m)=>tick(p,m),"audio/wav",66,82);
+  }
+  tick(97,"Parsing transcript");
+  const sents=parseDeepgramResult(data);
   tick(100,"Done");
   return sents;}
 
@@ -208,4 +239,4 @@ function hardTrimCuts(cuts,maxS){if(!cuts||!cuts.length)return cuts||[];let d=cu
 function finalizeRegionCuts(region,sentences,sentScore,ideal,minS,maxS){const rawCuts=compressRegion(region,sentences,sentScore,ideal,minS);let cuts=rawCuts.map(c=>{const rb=refineCutBounds(c);return{cs:rb.cs,ce:rb.ce,sentLo:c.sentLo,sentHi:c.sentHi};}).filter(c=>c.ce-c.cs>=0.4);cuts.sort((a,b)=>a.cs-b.cs);const merged=[];for(const c of cuts){const last=merged[merged.length-1];if(last&&c.cs-last.ce<0.2){last.ce=Math.max(last.ce,c.ce);last.sentHi=c.sentHi;}else merged.push({cs:c.cs,ce:c.ce,sentLo:c.sentLo,sentHi:c.sentHi});}while(cutDurOf(merged)>maxS&&merged.length>1){let wi=0,ws=Infinity;for(let i=0;i<merged.length;i++){if(i===0&&merged.length>2)continue;const sc=avgCutScore([merged[i]],sentScore);if(sc<ws){ws=sc;wi=i;}}merged.splice(wi,1);}cuts=hardTrimCuts(merged,maxS);region.cuts=cuts;region.cutDuration=cutDurOf(cuts);region._avgScore=avgCutScore(cuts,sentScore);return region;}
 function pickBestSingleClip(scored,sentences,sentScore,targetS){const{ideal,minS,maxS}=durationWindow(targetS);if(!scored.length)return[];const pool=scored.slice(0,50);let fallback=null;let fallbackDist=Infinity;for(const cand of pool){const trial={...cand,cuts:null,cutDuration:0};finalizeRegionCuts(trial,sentences,sentScore,ideal,minS,maxS);const d=trial.cutDuration||0;if(d>=minS&&d<=maxS&&trial.cuts&&trial.cuts.length){cand.cuts=trial.cuts;cand.cutDuration=trial.cutDuration;cand._avgScore=trial._avgScore;return[cand];}if(trial.cuts&&trial.cuts.length){const dist=Math.abs(d-ideal)+(d>maxS?(d-maxS)*2:0)+(d<minS?(minS-d)*1.5:0);if(dist<fallbackDist){fallbackDist=dist;fallback=trial;fallback._src=cand;}}}if(fallback&&fallback._src){let cuts=hardTrimCuts(fallback.cuts.map(c=>({...c})),maxS);if(cutDurOf(cuts)>maxS)cuts=hardTrimCuts(cuts,maxS);const src=fallback._src;src.cuts=cuts;src.cutDuration=cutDurOf(cuts);src._avgScore=avgCutScore(cuts,sentScore);if(src.cutDuration>maxS+0.5){src.cuts=hardTrimCuts(src.cuts,maxS);src.cutDuration=cutDurOf(src.cuts);}return src.cuts&&src.cuts.length?[src]:[];}return[];}
 function buildMomentCuts(regions,sentences,sentScore,totalTargetS){const{ideal,minS,maxS}=durationWindow(totalTargetS);for(const r of regions)finalizeRegionCuts(r,sentences,sentScore,ideal,minS,maxS);return regions;}
-async function analyzeAudio(file){try{const ab=await file.arrayBuffer();const ctx=new(window.AudioContext||window.webkitAudioContext)();const audio=await ctx.decodeAudioData(ab);const data=audio.getChannelData(0),sr=audio.sampleRate,dur=audio.duration;const energy=[];for(let i=0;i<Math.ceil(dur);i++){const from=i*sr,to=Math.min(data.length,(i+1)*sr);let sum=0;for(let j=from;j<to;j++)sum+=data[j]*data[j];energy.push(Math.sqrt(sum/Math.max(to-from,1)));}const eMax=Math.max(arrMax(energy),0.0001);await ctx.close();return energy.map(v=>v/eMax);}catch(e){console.warn("Audio analysis failed:",e);return null;}}
+async function analyzeAudio(file){try{const ab=await file.arrayBuffer();const ctx=new(window.AudioContext||window.webkitAudioContext)();const audio=await ctx.decodeAudioData(ab);const data=audio.getChannelData(0),sr=audio.sampleRate,dur=audio.duration;const energy=[];for(let i=0;i<Math.ceil(dur);i++){const from=i*sr,to=Math.min(data.length,(i+1)*sr);let sum=0;for(let j=from;j<to;j++)sum+=data[j]*data[j];energy.push(Math.sqrt(sum/Math.max(to-from,1)));if(i%600===599)await new Promise(r=>setTimeout(r,0));}const eMax=Math.max(arrMax(energy),0.0001);await ctx.close();return energy.map(v=>v/eMax);}catch(e){console.warn("Audio analysis failed:",e);return null;}}
