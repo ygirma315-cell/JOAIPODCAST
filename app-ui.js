@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION="v23";
-const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 CRITICAL FIX: render no longer stuck at 0% \u2014 removed rVFC (unreliable across browsers), now using rAF+dedup which always fires\n\u2022 CRITICAL FIX: smart-wait timeout (300ms safety) prevents hang if autoplay is blocked\n\u2022 FIX: ReferenceError crash (nowMs was undefined in captureFrame scope)\n\u2022 FIXED: captureStream audio primary (same clock as currentTime, no Web Audio drift)\n\u2022 FIXED: render stutter \u2014 dedup captures at source frame rate, no dupes\n\u2022 FIXED: background audio leak during render (player volume=0, captureStream still gets audio)\n\u2022 IMPROVED: multi-face tracking \u2014 cycles between speakers for a natural multi-shot look";
+const APP_VERSION="v21";
+const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 AI transcribe: ONE stable percentage that never goes backwards\n\u2022 Smart speaker camera: detects both people, follows whoever is TALKING (lip movement), switches turn-by-turn naturally\n\u2022 Never frames the empty desk in the middle \u2014 always locks onto a person\n\u2022 Accepts more video formats (MP4, MOV, WebM, MKV, AVI, M4V)\n\u2022 MP4 output + audio/video locked in sync";
 
 /* ================= STEP 4: ANALYZE (single best clip) ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Scanning for the best part"],["score","Scoring virality signals"],["select","Picking the #1 moment"],["refine","Cropping filler to target length"]];
@@ -56,7 +56,7 @@ function pickAnotherPart(){
 /* ================= STEP 5: RENDER ================= */
 async function startRender(){goStep(5);
   $("#render-box").style.display="block";$("#final-box").style.display="none";
-  const p=$("#player");p.playsInline=true;p.preload="auto";p.playbackRate=1;
+  const p=$("#player");p.muted=true;p.playsInline=true;p.preload="auto";
   if(p.src!==S.videoURL){p.src=S.videoURL;p.load();}
   await waitMeta(p);
   const moments=S.selected;
@@ -67,36 +67,29 @@ async function startRender(){goStep(5);
   exportClips();}
 function waitMeta(p){return new Promise(r=>{if(p.readyState>=1&&p.videoWidth)return r();const done=()=>{p.removeEventListener("loadedmetadata",done);p.removeEventListener("loadeddata",done);r();};p.addEventListener("loadedmetadata",done);p.addEventListener("loadeddata",done);setTimeout(done,8000);});}
 function seekTo(p,t){return new Promise(resolve=>{const target=Math.max(0,Math.min(t,(p.duration||t)-0.05));if(Math.abs((p.currentTime||0)-target)<0.05&&p.readyState>=2){resolve();return;}let settled=false;const finish=()=>{if(settled)return;settled=true;p.removeEventListener("seeked",onSeek);p.removeEventListener("loadeddata",onSeek);clearTimeout(to);resolve();};const onSeek=()=>finish();p.addEventListener("seeked",onSeek);p.addEventListener("loadeddata",onSeek);try{p.pause();}catch(e){}try{p.currentTime=target;}catch(e){finish();return;}const to=setTimeout(finish,2500);});}
-/* Wire the hidden <video> into Web Audio once. Speakers stay silent (gain 0),
-   but a MediaStreamDestination still gets full audio for the recorder.
-   This avoids the old bug: muting the element made captureStream audio empty/desynced. */
-function ensureAudioGraph(videoEl){
-  if(videoEl._cfAudio&&videoEl._cfAudio.dest)return videoEl._cfAudio;
-  const Ctx=window.AudioContext||window.webkitAudioContext;
-  if(!Ctx)return null;
-  try{
-    const actx=new Ctx();
-    const src=actx.createMediaElementSource(videoEl);
-    const dest=actx.createMediaStreamDestination();
-    const silent=actx.createGain();silent.gain.value=0;
-    src.connect(dest);
-    src.connect(silent);
-    silent.connect(actx.destination);
-    videoEl._cfAudio={actx,src,dest,silent};
-    return videoEl._cfAudio;
-  }catch(e){console.warn("Web Audio graph failed:",e);return null;}
-}
-async function resumeAudioCtx(graph){
-  if(!graph||!graph.actx)return;
-  try{if(graph.actx.state==="suspended")await graph.actx.resume();}catch(e){}
-}
 
-/* ================= SPEAKER AUTO-FOCUS (multi-face tracking, downscaled = cheap) =================
-   Cycles between detected faces every ~3s so both speakers get screen time (multi-shot look). */
-const FOCUS={x:0.5,tx:0.5,det:null,busy:false,last:0,enabled:false,cv:null,cctx:null,faces:[]};
-function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.busy=false;FOCUS.last=0;FOCUS.det=null;FOCUS.enabled=false;FOCUS.faces=[];
-  try{if(opt.focus!==false&&("FaceDetector" in window)){FOCUS.det=new window.FaceDetector({fastMode:true,maxDetectedFaces:6});FOCUS.enabled=true;}}catch(e){FOCUS.det=null;FOCUS.enabled=false;}}
-function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const now=performance.now();if(now-FOCUS.last<500)return;FOCUS.last=now;FOCUS.busy=true;
+/* ================= SMART SPEAKER CAMERA v2 =================
+   Detects ALL faces (both podcast hosts), remembers their "seats" (left/right),
+   measures LIP MOVEMENT on each face to figure out who is actually talking,
+   and points the vertical crop at that person — switching turn-by-turn with
+   hysteresis so it feels like a natural multi-cam edit. It NEVER parks the
+   frame on the empty middle/desk: the camera is always locked to a person. */
+const FOCUS={x:0.5,tx:0.5,det:null,busy:false,last:0,enabled:false,cv:null,cctx:null,seats:[],activeSeat:null,votes:0};
+function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.busy=false;FOCUS.last=0;FOCUS.det=null;FOCUS.enabled=false;FOCUS.seats=[];FOCUS.activeSeat=null;FOCUS.votes=0;
+  try{if(opt.focus!==false&&("FaceDetector" in window)){FOCUS.det=new window.FaceDetector({fastMode:true,maxDetectedFaces:4});FOCUS.enabled=true;}}catch(e){FOCUS.det=null;FOCUS.enabled=false;}}
+function mouthMotion(ctx,seat,bx,by,bw,bh,dw,dh){
+  /* sample the mouth area (lower part of the face box) and compare with the
+     previous sample — lots of pixel change there = this person is talking */
+  const mx=Math.max(0,Math.min(dw-5,Math.round(bx+bw*0.2))),my=Math.max(0,Math.min(dh-5,Math.round(by+bh*0.55)));
+  const mw=Math.max(4,Math.min(dw-mx,Math.round(bw*0.6))),mh=Math.max(4,Math.min(dh-my,Math.round(bh*0.42)));
+  let img;try{img=ctx.getImageData(mx,my,mw,mh);}catch(e){return 0;}
+  const data=img.data;const cur=[];
+  const step=Math.max(1,Math.floor(data.length/4/300))*4;
+  for(let i=0;i<data.length;i+=step)cur.push((data[i]+data[i+1]+data[i+2])/3);
+  let m=0;
+  if(seat.prevMouth&&seat.prevMouth.length===cur.length){let sum=0;for(let i=0;i<cur.length;i++)sum+=Math.abs(cur[i]-seat.prevMouth[i]);m=sum/cur.length;}
+  seat.prevMouth=cur;return m;}
+function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const now=performance.now();if(now-FOCUS.last<400)return;FOCUS.last=now;FOCUS.busy=true;
   try{
     const vw=p.videoWidth||320,vh=p.videoHeight||180;
     const dw=224,dh=Math.max(2,Math.round(dw*vh/vw));
@@ -104,26 +97,37 @@ function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const n
     if(FOCUS.cv.width!==dw||FOCUS.cv.height!==dh){FOCUS.cv.width=dw;FOCUS.cv.height=dh;FOCUS.cctx=FOCUS.cv.getContext("2d",{willReadFrequently:true});}
     if(!FOCUS.cctx)FOCUS.cctx=FOCUS.cv.getContext("2d",{willReadFrequently:true});
     FOCUS.cctx.drawImage(p,0,0,dw,dh);
-    FOCUS.det.detect(FOCUS.cv).then(faces=>{FOCUS.busy=false;if(!faces||!faces.length)return;
-      FOCUS.faces=faces;
+    FOCUS.det.detect(FOCUS.cv).then(faces=>{FOCUS.busy=false;
+      for(const s of FOCUS.seats)s.seen=false;
+      for(const f of (faces||[])){const b=f.boundingBox;const cx=(b.x+b.width/2)/dw;if(!isFinite(cx))continue;
+        /* match this face to a known seat (a host's usual position) */
+        let seat=null,best=0.14;
+        for(const s of FOCUS.seats){const d=Math.abs(s.x-cx);if(d<best){best=d;seat=s;}}
+        if(!seat){seat={x:cx,talk:0,prevMouth:null,miss:0};FOCUS.seats.push(seat);}
+        seat.x=seat.x*0.6+cx*0.4;seat.seen=true;seat.miss=0;
+        const m=mouthMotion(FOCUS.cctx,seat,b.x,b.y,b.width,b.height,dw,dh);
+        seat.talk=seat.talk*0.55+m*0.45; /* smoothed talking score */
+      }
+      for(const s of FOCUS.seats)if(!s.seen)s.miss=(s.miss||0)+1;
+      FOCUS.seats=FOCUS.seats.filter(s=>s.miss<10);
+      const vis=FOCUS.seats.filter(s=>s.miss<3);
+      if(!vis.length)return; /* nobody visible — hold current framing */
+      let target=null;
+      if(vis.length===1){target=vis[0];FOCUS.activeSeat=target;FOCUS.votes=0;}
+      else{
+        /* two or more people: follow whoever is talking, switch with hysteresis
+           so the "camera" changes turn-by-turn, not jittery — and never the middle */
+        const sorted=vis.slice().sort((a,b)=>b.talk-a.talk);
+        let cur=FOCUS.activeSeat&&vis.includes(FOCUS.activeSeat)?FOCUS.activeSeat:null;
+        const cand=sorted[0];
+        if(!cur){FOCUS.activeSeat=cand;FOCUS.votes=0;}
+        else if(cand!==cur&&cand.talk>cur.talk*1.35+0.4){FOCUS.votes++;if(FOCUS.votes>=2){FOCUS.activeSeat=cand;FOCUS.votes=0;}}
+        else FOCUS.votes=0;
+        target=FOCUS.activeSeat;
+      }
+      if(target)FOCUS.tx=Math.min(0.92,Math.max(0.08,target.x));
     }).catch(()=>{FOCUS.busy=false;});
   }catch(e){FOCUS.busy=false;}}
-
-/* Called every captured frame — applies the multi-face cycling logic */
-function applyFocus(now){
-  if(!FOCUS.enabled||!FOCUS.faces.length)return;
-  const faces=FOCUS.faces;
-  if(faces.length===1){
-    const cx=(faces[0].boundingBox.x+faces[0].boundingBox.width/2)/224;
-    if(isFinite(cx))FOCUS.tx=Math.min(0.92,Math.max(0.08,cx));
-  }else{
-    /* Cycle between speakers every 3s for a natural multi-shot feel */
-    const faceIdx=Math.floor((now/3000)%faces.length);
-    const face=faces[faceIdx];
-    const cx=(face.boundingBox.x+face.boundingBox.width/2)/224;
-    if(isFinite(cx))FOCUS.tx=Math.min(0.92,Math.max(0.08,cx));
-  }
-}
 
 /* ================= CAPTIONS (cached overlay — zero per-frame layout cost) ================= */
 const CAP_MAX_WORDS=6;
@@ -150,9 +154,7 @@ function drawCaption(ctx,cw,ch,t,opt){if(!opt.captions||opt.capTemplate==="none"
   ctx.drawImage(CAPC.cv,0,0);}
 function drawWM(ctx,cw,ch,text){if(!text)return;ctx.save();const fs=Math.round(cw*0.03);ctx.font="700 "+fs+"px -apple-system,sans-serif";ctx.textAlign="right";ctx.textBaseline="top";ctx.shadowColor="rgba(0,0,0,.7)";ctx.shadowBlur=6;ctx.fillStyle="rgba(255,255,255,.82)";ctx.fillText(text,cw-fs,fs);ctx.restore();}
 
-/* ================= CODEC PICKER =================
-   MP4 (H.264 + AAC) plays literally everywhere — phones, TVs, WhatsApp, editors.
-   We try MP4 first and only fall back to WebM if the browser can't record MP4. */
+/* ================= CODEC PICKER (MP4 first = plays everywhere) ================= */
 function pickRecorderFormat(){
   const mp4Types=["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4;codecs=avc1.424028,mp4a.40.2","video/mp4;codecs=avc1,mp4a.40.2","video/mp4;codecs=avc1,opus","video/mp4;codecs=avc1","video/mp4"];
   const webmTypes=["video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus","video/webm;codecs=vp8","video/webm"];
@@ -162,18 +164,7 @@ function pickRecorderFormat(){
   }
   return{mime:"video/webm",ext:"webm"};}
 
-/* ================= ROBUST RENDER ENGINE (v21) =================
-   Root cause of lag / "audio not with video":
-   - Old code drew VIDEO on a canvas and grabbed AUDIO separately from a MUTED
-     <video> via captureStream, then forced mid-cut seeks to "catch up".
-   - Muted captureStream audio is unreliable, and seeking mid-cut freezes the
-     picture while audio keeps going \u2192 desync + lag.
-
-   v21 fix:
-   1) Web Audio graph: full audio \u2192 MediaRecorder, gain 0 \u2192 speakers (no mute hack)
-   2) Video currentTime is the ONLY clock (never seek mid-cut)
-   3) canvas.captureStream(0) + requestFrame so frames match what we draw
-   4) Recorder pauses only between cuts (during seeks) */
+/* ================= ROBUST RENDER ENGINE (720p, A/V drift lock, MP4-first) ================= */
 async function exportClips(){if(S.exporting)return;
   const moments=(S.selected||[]).filter(m=>m.cuts&&m.cuts.length);
   if(!moments.length){showAlert("Nothing to render \u2014 run the analysis first.");goStep(3);return;}
@@ -181,174 +172,84 @@ async function exportClips(){if(S.exporting)return;
   S._capIdx=0;CAPC.key="";
   $("#export-bar").style.width="0%";$("#export-pct").textContent="0%";
   $("#export-log").textContent="Preparing renderer\u2026";
-  const p=$("#player");
-  /* Element must NOT be muted — both captureStream and Web Audio need decoded audio */
-  /* Volume kept at 0 so speakers stay silent during render; captureStream still gets audio */
-  p.muted=false;p.volume=0;p.playbackRate=1;p.playsInline=true;
+  const p=$("#player");p.muted=true;p.volume=0;p.playbackRate=1;p.playsInline=true;
   if(!p.src||p.src!==S.videoURL){p.src=S.videoURL;p.load();}await waitMeta(p);
   setupFocus(opt);
   let cw=720,ch=1280;if(opt.aspect==="1:1"){cw=720;ch=720;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
-  const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;
-  const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="medium";
-  const fps=30;
-  /* fps=0 + requestFrame = we only emit a frame when we actually draw it */
-  let stream;let vTrack=null;let manualFrames=false;
-  try{stream=canvas.captureStream(0);vTrack=stream.getVideoTracks()[0]||null;manualFrames=!!(vTrack&&typeof vTrack.requestFrame==="function");
-    if(!manualFrames){try{stream.getTracks().forEach(t=>t.stop());}catch(e){}stream=canvas.captureStream(fps);vTrack=stream.getVideoTracks()[0]||null;manualFrames=false;}
-  }catch(e){stream=canvas.captureStream(fps);vTrack=stream.getVideoTracks()[0]||null;manualFrames=false;}
-
-  /* --- AUDIO: video element captureStream first (naturally synced with currentTime); Web Audio fallback --- */
-  /* --- FIX: captureStream provides audio from the same decoded buffer as currentTime, so audio
-       & picture are always from the same source clock. Web Audio routing adds latency/drift. --- */
-  let audioAttached=false;
-  let audioGraph=null;
-  try{
-    const ps=p.captureStream?p.captureStream():(p.mozCaptureStream?p.mozCaptureStream():null);
-    if(ps){ps.getAudioTracks().forEach(t=>{try{stream.addTrack(t);audioAttached=true;}catch(e){}});}
-  }catch(e){console.warn("captureStream audio failed:",e);}
-  if(!audioAttached){
-    audioGraph=ensureAudioGraph(p);
-    await resumeAudioCtx(audioGraph);
-    if(audioGraph&&audioGraph.dest){
-      try{audioGraph.dest.stream.getAudioTracks().forEach(t=>{stream.addTrack(t);audioAttached=true;});}catch(e){console.warn("Web Audio track attach failed:",e);}
-    }
-  }
-  if(!audioAttached){console.warn("Export will be silent — browser blocked audio capture.");}
-
+  const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="medium";
+  const fps=30;const stream=canvas.captureStream(fps);
+  try{const ps=p.captureStream?p.captureStream():(p.mozCaptureStream?p.mozCaptureStream():null);if(ps){ps.getAudioTracks().forEach(t=>{try{stream.addTrack(t);}catch(e){}});} }catch(e){console.warn("No audio track:",e);}
   const fmt=pickRecorderFormat();let mime=fmt.mime,ext=fmt.ext;
-  let rec;try{rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:3_500_000,audioBitsPerSecond:128_000});}
-  catch(e){try{rec=new MediaRecorder(stream,{mimeType:"video/webm",videoBitsPerSecond:3_000_000,audioBitsPerSecond:128_000});mime="video/webm";ext="webm";}
-  catch(e2){showAlert("This browser cannot record video (MediaRecorder missing). Try Chrome/Edge on desktop.");S.exporting=false;return;}}
-  const chunks=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
-  const stopped=new Promise(res=>{rec.onstop=()=>res();rec.onerror=()=>res();});
+  let rec;try{rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4_500_000,audioBitsPerSecond:128_000});}catch(e){try{rec=new MediaRecorder(stream,{mimeType:"video/webm",videoBitsPerSecond:3_500_000});mime="video/webm";ext="webm";}catch(e2){showAlert("This browser cannot record video (MediaRecorder missing). Try Chrome/Edge on desktop.");S.exporting=false;return;}}
+  const chunks=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};const stopped=new Promise(res=>{rec.onstop=()=>res();rec.onerror=()=>res();});
   function recPause(){try{if(rec.state==="recording")rec.pause();}catch(e){}}
   function recResume(){try{if(rec.state==="paused")rec.resume();}catch(e){}}
-
+  ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);if(rec.state==="inactive")rec.start(200);
   const planned=moments.reduce((n,m)=>n+(m.cutDuration||0),0)||1;let rendered=0;const F=0.35,CUTPOP=0.12;
   const totalCutsAll=moments.reduce((n,m)=>n+m.cuts.length,0);let cutIndex=0;
-
-  function drawFrame(srcT,cut,mi,ci,cutT,cutDur){
-    const vw=p.videoWidth||cw,vh=p.videoHeight||ch;let cr=cropRect(vw,vh,cw,ch);
+  const frameMs=1000/fps;
+  function drawFrame(srcT,cut,mi,ci,cutT,cutDur){const vw=p.videoWidth||cw,vh=p.videoHeight||ch;let cr=cropRect(vw,vh,cw,ch);
     if(FOCUS.enabled&&cr.sw<vw-1){const desired=FOCUS.x*vw-cr.sw/2;cr.sx=Math.min(Math.max(desired,0),vw-cr.sw);}
     if(opt.zoom){const zp=Math.min(Math.max(cutT/Math.max(cutDur,0.01),0),1);const z=1+0.06*zp;const sw2=cr.sw/z,sh2=cr.sh/z;cr={sx:cr.sx+(cr.sw-sw2)/2,sy:cr.sy+(cr.sh-sh2)/2,sw:sw2,sh:sh2};}
     if(cutT<CUTPOP&&!(mi===0&&ci===0)){const pz=1+0.05*(1-cutT/CUTPOP);const sw3=cr.sw/pz,sh3=cr.sh/pz;cr={sx:cr.sx+(cr.sw-sw3)/2,sy:cr.sy+(cr.sh-sh3)/2,sw:sw3,sh:sh3};}
-    ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);
-    try{if(p.videoWidth)ctx.drawImage(p,cr.sx,cr.sy,cr.sw,cr.sh,0,0,cw,ch);}catch(e){}
-    drawCaption(ctx,cw,ch,srcT,opt);
-    if(opt.watermark)drawWM(ctx,cw,ch,opt.wmText);
-    if(opt.fades){let a=0;if(ci===0){if(cutT<F)a=Math.max(a,1-cutT/F);}if(ci===(moments[mi].cuts.length-1)){const tOut=cutDur-cutT;if(tOut<F)a=Math.max(a,1-tOut/F);}if(a>0){ctx.fillStyle="rgba(0,0,0,"+Math.min(Math.max(a,0),1).toFixed(3)+")";ctx.fillRect(0,0,cw,ch);}}
-    if(manualFrames){try{vTrack.requestFrame();}catch(e){}}
-  }
-
-  ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);if(manualFrames){try{vTrack.requestFrame();}catch(e){}}
-  if(rec.state==="inactive")rec.start(250);
-
+    ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);try{if(p.videoWidth)ctx.drawImage(p,cr.sx,cr.sy,cr.sw,cr.sh,0,0,cw,ch);}catch(e){}drawCaption(ctx,cw,ch,srcT,opt);if(opt.watermark)drawWM(ctx,cw,ch,opt.wmText);if(opt.fades){let a=0;if(ci===0){if(cutT<F)a=Math.max(a,1-cutT/F);}if(ci===(moments[mi].cuts.length-1)){const tOut=cutDur-cutT;if(tOut<F)a=Math.max(a,1-tOut/F);}if(a>0){ctx.fillStyle="rgba(0,0,0,"+Math.min(Math.max(a,0),1).toFixed(3)+")";ctx.fillRect(0,0,cw,ch);}}}
   for(let mi=0;mi<moments.length&&!S.cancelExport;mi++){const moment=moments[mi];const cuts=moment.cuts;
     for(let ci=0;ci<cuts.length&&!S.cancelExport;ci++){const cut=cuts[ci];cutIndex++;const cutDur=Math.max(cut.ce-cut.cs,0.2);
       $("#export-log").textContent="\ud83c\udfac Rendering cut "+cutIndex+"/"+totalCutsAll+" \u00b7 "+fmtTime(rendered)+" / "+fmtTime(planned);
-      /* Pause recorder while seeking so we never record a freeze or audio glitch */
       recPause();
-      try{p.pause();}catch(e){}
       await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;
-      await resumeAudioCtx(audioGraph);
-      /* Keep element unmuted (captureStream needs decoded audio); volume=0 keeps speakers silent */
-      p.muted=false;p.volume=0;p.playbackRate=1;
-      try{await p.play();}catch(e){try{await p.play();}catch(e2){}}
-      /* Wait for playback to settle (~1 frame, max 300ms safety timeout) */
-      await new Promise(r => {
-        const to = setTimeout(r, 300);
-        const chk = () => {
-          if (S.cancelExport) { clearTimeout(to); r(); return; }
-          if (p.currentTime > cut.cs + 0.03) { clearTimeout(to); r(); }
-          else requestAnimationFrame(chk);
-        };
-        requestAnimationFrame(chk);
-      });
-      if (S.cancelExport) break;
-      drawFrame(Math.max(p.currentTime, cut.cs), cut, mi, ci, 0, cutDur);
+      try{p.muted=true;p.volume=0;await p.play();}catch(e){}
+      drawFrame(Math.max(p.currentTime,cut.cs),cut,mi,ci,0,cutDur);
       recResume();
-
-      /* Capture at source frame rate via rAF + dedup (reliable across all browsers).
-         Only push a frame when currentTime actually advances — no duplicates. */
-      let lastFrameT = p.currentTime;
-      const wall0 = performance.now();
-
-      await new Promise(resolve => {
-        function captureFrame() {
-          if (S.cancelExport) { resolve(); return; }
-
-          const vidT = p.currentTime;
-          if (vidT - lastFrameT < 0.0005) {
-            requestAnimationFrame(captureFrame);
-            return;
-          }
-          lastFrameT = vidT;
-
-          updateFocus(p); applyFocus(performance.now()); FOCUS.x += (FOCUS.tx - FOCUS.x) * 0.10;
-
-          const srcT = Math.min(Math.max(vidT, cut.cs), cut.ce);
-          const cutT = srcT - cut.cs;
-          drawFrame(srcT, cut, mi, ci, cutT, cutDur);
-
-          const prog = (rendered + cutT) / planned * 100;
-          const pct = Math.min(Math.round(prog), 99);
-          $("#export-bar").style.width = pct + "%";
-          $("#export-pct").textContent = pct + "%";
-
-          const doneByVid = vidT >= cut.ce - 0.05;
-          const ended = p.ended && vidT >= cut.ce - 0.5;
-          const doneByWall = (performance.now() - wall0) / 1000 >= cutDur + 2.5;
-          if (doneByVid || ended || doneByWall) { resolve(); return; }
-
-          requestAnimationFrame(captureFrame);
-        }
-        requestAnimationFrame(captureFrame);
-      });
-
-      try{p.pause();}catch(e){}
-      rendered+=cutDur;
-    }
-  }
-
+      const t0=performance.now();let lastVidT=p.currentTime;let stuckMs=0;let lastDraw=0;let lastSync=0;
+      await new Promise(resolve=>{function tick(){if(S.cancelExport){resolve();return;}
+        const nowMs=performance.now();
+        if(nowMs-lastDraw<frameMs-2){requestAnimationFrame(tick);return;}
+        lastDraw=nowMs;
+        updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.12;
+        const wall=(nowMs-t0)/1000;let vidT=p.currentTime;
+        if(Math.abs(vidT-lastVidT)<0.001){stuckMs+=frameMs;}else{stuckMs=0;lastVidT=vidT;}
+        if(stuckMs>700){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;stuckMs=0;lastSync=nowMs;}
+        const relV=vidT-cut.cs;
+        if(wall-relV>0.4&&nowMs-lastSync>1000){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;lastSync=nowMs;}
+        const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);const cutT=Math.min(Math.max(srcT-cut.cs,wall),cutDur);
+        drawFrame(srcT,cut,mi,ci,cutT,cutDur);
+        const prog=(rendered+Math.min(cutT,cutDur))/planned*100;const pct=Math.min(Math.round(prog),99);$("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";
+        const doneByVid=vidT>=cut.ce-0.04;const doneByWall=wall>=cutDur;const ended=p.ended&&vidT>=cut.ce-0.5;
+        if(doneByVid||doneByWall||ended){resolve();return;}
+        requestAnimationFrame(tick);}requestAnimationFrame(tick);});
+      try{p.pause();}catch(e){}rendered+=cutDur;}}
   recResume();
-  if(!S.cancelExport){const holdEnd=performance.now()+300;while(performance.now()<holdEnd){await sleep(40);if(manualFrames){try{vTrack.requestFrame();}catch(e){}}}}
-  try{if(rec.state!=="inactive"){if(rec.requestData)rec.requestData();rec.stop();}}catch(e){}
-  await stopped;await sleep(80);
-  try{stream.getTracks().forEach(t=>t.stop());}catch(e){}
-  try{p.pause();}catch(e){}
-  p.muted=false;p.volume=1;S.exporting=false;
-
+  if(!S.cancelExport){const holdEnd=performance.now()+250;while(performance.now()<holdEnd){await sleep(40);}}
+  try{if(rec.state!=="inactive"){rec.requestData&&rec.requestData();rec.stop();}}catch(e){}await stopped;await sleep(80);
+  try{stream.getTracks().forEach(t=>t.stop());}catch(e){}p.muted=false;p.volume=1;S.exporting=false;
   if(S.cancelExport){$("#export-log").textContent="Render cancelled.";$("#export-bar").style.width="0%";$("#export-pct").textContent="";goStep(3);return;}
   if(!chunks.length){showAlert("Render produced an empty file. Try Chrome/Edge, keep the tab visible, and re-render.");goStep(3);return;}
   $("#export-bar").style.width="100%";$("#export-pct").textContent="100%";
   const blobType=ext==="mp4"?"video/mp4":"video/webm";
   const blob=new Blob(chunks,{type:blobType});
-  if(S._lastBlobUrl){try{URL.revokeObjectURL(S._lastBlobUrl);}catch(e){}}
-  const blobUrl=URL.createObjectURL(blob);S._lastBlobUrl=blobUrl;
+  if(S._lastBlobUrl){try{URL.revokeObjectURL(S._lastBlobUrl);}catch(e){}}const blobUrl=URL.createObjectURL(blob);S._lastBlobUrl=blobUrl;
   const fp=$("#final-player");fp.pause();fp.removeAttribute("src");fp.load();fp.preload="auto";fp.controls=true;fp.playsInline=true;fp.src=blobUrl;fp.load();
   const fname="podcast_clip_"+Date.now()+"."+ext;
   const dl=$("#download");dl.href=blobUrl;dl.download=fname;dl.setAttribute("download",fname);
   const tgt=opt.target_s||120;
   const fmtName=ext==="mp4"?"MP4 \u00b7 plays everywhere \u2705":"WebM (this browser can't record MP4 \u2014 use Chrome/Edge for MP4)";
-  const audNote=audioAttached?"":" \u00b7 \u26a0\ufe0f audio may be missing in this browser";
-  $("#final-info").innerHTML="\u2705 Render complete! <strong>1 best clip</strong> \u00b7 <strong>"+totalCutsAll+" jump-cut"+(totalCutsAll===1?"":"s")+"</strong> \u00b7 Length: <strong>"+fmtTime(planned)+"</strong> (target "+fmtTime(tgt)+") \u00b7 "+fmtBytes(blob.size)+" \u00b7 "+fmtName+" \u00b7 "+APP_VERSION+audNote;
+  $("#final-info").innerHTML="\u2705 Render complete! <strong>1 best clip</strong> \u00b7 <strong>"+totalCutsAll+" jump-cut"+(totalCutsAll===1?"":"s")+"</strong> \u00b7 Length: <strong>"+fmtTime(planned)+"</strong> (target "+fmtTime(tgt)+") \u00b7 "+fmtBytes(blob.size)+" \u00b7 "+fmtName+" \u00b7 "+APP_VERSION+"<br><span class='muted small'>\ud83d\udca1 If the preview above stutters, that's just the browser player \u2014 download the file and it will play perfectly in your own video player.</span>";
   $("#render-box").style.display="none";$("#final-box").style.display="block";
   await new Promise(r=>{const ok=()=>{fp.removeEventListener("canplay",ok);fp.removeEventListener("loadeddata",ok);clearTimeout(t);r();};fp.addEventListener("canplay",ok);fp.addEventListener("loadeddata",ok);const t=setTimeout(ok,4000);});
   try{fp.currentTime=0;await fp.play();}catch(e){}}
 
-/* ================= AI progress UI helper (percentage shown in ONE place only) ================= */
+/* ================= AI progress: ONE number, monotonic (never goes backwards) ================= */
 function setAiProgress(msg,pct){
   const st=$("#ai-status"),bar=$("#ai-bar"),lab=$("#ai-pct"),wrap=$("#ai-prog");
   if(wrap)wrap.classList.add("show");
-  const p=Math.round(Math.min(100,Math.max(0,pct==null?0:pct)));
+  let p=Math.round(Math.min(100,Math.max(0,pct==null?0:pct)));
+  /* monotonic guard: the shown percentage can only go UP during one run */
+  if(p<(S._aiPct||0))p=S._aiPct;else S._aiPct=p;
   if(bar)bar.style.width=p+"%";
   if(lab)lab.textContent=p+"%";
-  if(st){
-    const line=msg||"Working";
-    if(p>=100)st.textContent="\u2705 "+line;
-    else if(p>=88)st.textContent="\u23f3 Almost there \u2014 "+line+"\u2026";
-    else st.textContent="\u23f3 "+line+"\u2026";
-  }
+  /* status text is words only — the ONLY percentage on screen is the one above */
+  if(st)st.textContent=(p>=100?"\u2705 ":"\u23f3 ")+(msg||"Working")+(p>=100?"":"\u2026");
 }
 
 /* ================= BOOT ================= */
@@ -361,7 +262,6 @@ function boot(){
   let deb;const trText=$("#tr-text");
   if(trText)trText.addEventListener("input",()=>{clearTimeout(deb);deb=setTimeout(()=>{const t=trText.value.trim();if(t.length>10)handleTranscript(null,t);},700);});
 
-  /* Manual transcript hidden by default — toggle to reveal */
   const sm=$("#show-manual"),mb=$("#manual-box");
   if(sm&&mb)sm.addEventListener("click",()=>{mb.hidden=!mb.hidden;sm.textContent=mb.hidden?"\u270f\ufe0f Have your own transcript? Paste it manually":"\u2715 Hide manual transcript";if(!mb.hidden)mb.scrollIntoView({block:"nearest",behavior:"smooth"});});
 
@@ -376,6 +276,7 @@ function boot(){
     const btn=$("#ai-transcribe"),useBtn=$("#use-ai"),wrap=$("#ai-prog");
     btn.disabled=true;if(useBtn)useBtn.style.display="none";
     if(wrap)wrap.classList.add("show");
+    S._aiPct=0; /* reset the monotonic percentage for this run */
     setAiProgress("Starting",2);
     try{
       const sents=await transcribeWithDeepgram(S.videoFile,(msg,pct)=>setAiProgress(msg,pct));
