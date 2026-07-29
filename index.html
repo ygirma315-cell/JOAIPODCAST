@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=23">
+<link rel="stylesheet" href="styles.css?v=22">
 <style>
 #final-player { display:block; margin:0 auto; width:auto; max-width:100%; max-height:72vh; border-radius:var(--radius-lg); background:#000; border:1px solid var(--border); box-shadow:var(--shadow); animation:popIn .45s ease both; }
 #player { position:fixed; left:-9999px; top:0; width:320px; height:180px; opacity:0; pointer-events:none; z-index:-1; }
@@ -75,7 +75,7 @@
   <div class="brand">
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="3" fill="#2783DE"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="#fff"/></svg>
     ClipForge
-    <button class="ver-btn" id="ver-btn" type="button" title="Click to see what's new">v23 · latest</button>
+    <button class="ver-btn" id="ver-btn" type="button" title="Click to see what's new">v22 · latest</button>
     <span class="tagline">— AI podcast clipper, 100% in your browser</span>
   </div>
   <div class="top-right">
@@ -101,10 +101,10 @@
     <div class="dropzone" id="video-drop" tabindex="0">
       <div class="dz-icon">📂</div>
       <div class="dz-title">Drag &amp; drop your video here</div>
-      <div class="dz-sub">MP4, WebM, MOV</div>
+      <div class="dz-sub">MP4, MOV, WebM, MKV, AVI, M4V</div>
       <label class="btn primary mini dz-btn" for="video-input">📂 Choose video</label>
     </div>
-    <input type="file" id="video-input" accept="video/*" hidden>
+    <input type="file" id="video-input" accept="video/*,.mp4,.mov,.webm,.mkv,.avi,.m4v,video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo" hidden>
     <div class="info-grid" id="video-info" hidden></div>
     <div class="actions">
       <button class="btn primary" id="to-step-2" disabled>Next: Transcript →</button>
@@ -186,7 +186,7 @@
 
     <div class="opt-section">
       <h3>🎬 Editing</h3>
-      <p class="sec-sub">One best clip near your target (for 2 min: about 1:45–2:20). Speaker auto-focus keeps whoever is talking in the frame when cropping 16:9 to vertical.</p>
+      <p class="sec-sub">One best clip near your target (for 2 min: about 1:45–2:20). Speaker auto-focus detects the people and keeps whoever is talking centered when cropping 16:9 to vertical.</p>
       <div class="opt-group">
         <label class="opt-label">Final video length</label>
         <div class="seg-control" id="opt-duration"></div>
@@ -198,7 +198,7 @@
       <div class="opt-group">
         <label class="opt-label">Motion &amp; extras</label>
         <div class="toggles">
-          <label class="toggle"><input type="checkbox" id="opt-focus" checked> 🎯 Speaker auto-focus (face tracking)</label>
+          <label class="toggle"><input type="checkbox" id="opt-focus" checked> 🎯 Speaker auto-focus (person tracking)</label>
           <label class="toggle"><input type="checkbox" id="opt-fades" checked> Fade in/out</label>
           <label class="toggle"><input type="checkbox" id="opt-zoom" checked> Slow punch-in zoom</label>
           <label class="toggle"><input type="checkbox" id="opt-watermark"> Watermark</label>
@@ -225,7 +225,7 @@
   <!-- STEP 5 -->
   <section class="card" id="panel-5" hidden>
     <h2>🎬 Your final edit</h2>
-    <video id="player" playsinline preload="auto" crossorigin="anonymous"></video>
+    <video id="player" playsinline preload="auto" muted crossorigin="anonymous"></video>
 
     <div id="render-box">
       <p class="muted" id="render-info"></p>
@@ -256,7 +256,7 @@
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=23"></script>
-<script src="app-ui.js?v=23"></script>
+<script src="app-core.js?v=22"></script>
+<script src="app-ui.js?v=22"></script>
 </body>
 </html>
