@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION="v23";
-const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 TRUE AUDIO/VIDEO SYNC \u2014 every frame is now stamped to the exact moment of YOUR file's timeline (frame-accurate capture)\n\u2022 Fixed 'voice ahead of video' drift: recording now waits for real frames at every cut start (old version recorded frozen frames while audio rolled)\n\u2022 Audio is taken 1:1 from your original video \u2014 never separated, never rebuilt\n\u2022 Removed the old clock-jump hack that caused audio skips\n\u2022 Built-in person detection (works in EVERY browser) \u2014 camera follows whoever is talking";
+const APP_VERSION="v24";
+const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 CAMERA LOCKS ON INSTANTLY \u2014 when the speaker changes or someone moves sideways, the camera CUTS straight to them (no more slow slide showing a half-cropped person)\n\u2022 2x faster tracking \u2014 follows moving people tightly, small moves stay buttery smooth\n\u2022 TRUE AUDIO/VIDEO SYNC \u2014 frame-accurate capture locked to your file's timeline\n\u2022 Audio taken 1:1 from your original video \u2014 never separated, never rebuilt\n\u2022 Built-in person detection (works in EVERY browser)";
 
 /* ================= STEP 4: ANALYZE (single best clip) ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Scanning for the best part"],["score","Scoring virality signals"],["select","Picking the #1 moment"],["refine","Cropping filler to target length"]];
@@ -68,22 +68,25 @@ async function startRender(){goStep(5);
 function waitMeta(p){return new Promise(r=>{if(p.readyState>=1&&p.videoWidth)return r();const done=()=>{p.removeEventListener("loadedmetadata",done);p.removeEventListener("loadeddata",done);r();};p.addEventListener("loadedmetadata",done);p.addEventListener("loadeddata",done);setTimeout(done,8000);});}
 function seekTo(p,t){return new Promise(resolve=>{const target=Math.max(0,Math.min(t,(p.duration||t)-0.05));if(Math.abs((p.currentTime||0)-target)<0.05&&p.readyState>=2){resolve();return;}let settled=false;const finish=()=>{if(settled)return;settled=true;p.removeEventListener("seeked",onSeek);p.removeEventListener("loadeddata",onSeek);clearTimeout(to);resolve();};const onSeek=()=>finish();p.addEventListener("seeked",onSeek);p.addEventListener("loadeddata",onSeek);try{p.pause();}catch(e){}try{p.currentTime=target;}catch(e){finish();return;}const to=setTimeout(finish,2500);});}
 
-/* ================= SMART SPEAKER CAMERA v3 — OUR OWN DETECTION ENGINE =================
-   No FaceDetector API (it only exists on some Chrome builds). Instead we run our own
-   computer-vision pass on a tiny 112px copy of the frame every ~0.35s:
-   1. SKIN DETECTION — each pixel is tested with RGB + YCbCr skin-tone rules; skin
-      pixels vote for their column (upper rows count more, faces live up there).
-   2. MOTION DETECTION — per-column brightness difference vs the previous sample;
-      a talking person's mouth/head/hands create motion in their columns.
-   3. The column votes are clustered into person \"blobs\" → stable seats (left host,
-      right host). If skin fails (B&W footage etc.) we cluster on motion instead.
-   4. Whoever's seat has the most motion is the SPEAKER — the crop locks onto them
-      and switches turn-by-turn with hysteresis, like a natural multicam edit.
-   The camera never parks on the empty middle/desk: it always aims at a person. */
-const FOCUS={x:0.5,tx:0.5,enabled:false,last:0,cv:null,cctx:null,prevLum:null,seats:[],activeSeat:null,votes:0};
-function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.last=0;FOCUS.prevLum=null;FOCUS.seats=[];FOCUS.activeSeat=null;FOCUS.votes=0;FOCUS.enabled=opt.focus!==false;}
+/* ================= SMART SPEAKER CAMERA v4 — OUR OWN DETECTION ENGINE =================
+   No FaceDetector API. Our own computer-vision pass on a tiny 112px copy of the frame
+   every ~0.22s:
+   1. SKIN DETECTION — RGB + YCbCr skin-tone rules; skin pixels vote for their column.
+   2. MOTION DETECTION — per-column brightness diff vs previous sample.
+   3. Column votes are clustered into person \"blobs\" → stable seats.
+   4. Whoever's seat has the most motion is the SPEAKER.
+   CAMERA BEHAVIOR (v24): when the speaker changes or the person moves far, the camera
+   HARD-CUTS straight to them like a real multicam edit — no slow slide that leaves the
+   person half-cropped. Small drifts are still smoothed so it never jitters. */
+const FOCUS={x:0.5,tx:0.5,enabled:false,last:0,cv:null,cctx:null,prevLum:null,seats:[],activeSeat:null,votes:0,cut:false};
+function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.last=0;FOCUS.prevLum=null;FOCUS.seats=[];FOCUS.activeSeat=null;FOCUS.votes=0;FOCUS.cut=false;FOCUS.enabled=opt.focus!==false;}
 function focusResetMotion(){FOCUS.prevLum=null;}
-function updateFocus(p){if(!FOCUS.enabled||!p.videoWidth)return;const now=performance.now();if(now-FOCUS.last<350)return;const gap=now-FOCUS.last;FOCUS.last=now;
+/* per-frame camera move: instant cut when far / speaker switch, smooth when close */
+function focusStep(){const d=FOCUS.tx-FOCUS.x,ad=Math.abs(d);
+  if(FOCUS.cut||ad>0.18){FOCUS.x=FOCUS.tx;FOCUS.cut=false;}
+  else if(ad>0.05)FOCUS.x+=d*0.45;
+  else FOCUS.x+=d*0.18;}
+function updateFocus(p){if(!FOCUS.enabled||!p.videoWidth)return;const now=performance.now();if(now-FOCUS.last<220)return;const gap=now-FOCUS.last;FOCUS.last=now;
   try{
     const vw=p.videoWidth,vh=p.videoHeight;
     const dw=112,dh=Math.max(8,Math.round(dw*vh/vw));
@@ -125,7 +128,8 @@ function updateFocus(p){if(!FOCUS.enabled||!p.videoWidth)return;const now=perfor
       let seat=null,bd=0.13;
       for(const s of FOCUS.seats){const d=Math.abs(s.x-bl.x);if(d<bd){bd=d;seat=s;}}
       if(!seat){seat={x:bl.x,talk:0,miss:0};FOCUS.seats.push(seat);}
-      seat.x=seat.x*0.65+bl.x*0.35;seat.seen=true;seat.miss=0;
+      /* fast follow: give the NEW position most of the weight so sideways moves lock on */
+      seat.x=seat.x*0.35+bl.x*0.65;seat.seen=true;seat.miss=0;
       seat.talk=seat.talk*0.55+(usePrev?bl.mot:0)*0.45;
     }
     for(const s of FOCUS.seats)if(!s.seen)s.miss=(s.miss||0)+1;
@@ -133,13 +137,13 @@ function updateFocus(p){if(!FOCUS.enabled||!p.videoWidth)return;const now=perfor
     const vis=FOCUS.seats.filter(s=>s.miss<3);
     if(!vis.length)return;
     let target=null;
-    if(vis.length===1){target=vis[0];FOCUS.activeSeat=target;FOCUS.votes=0;}
+    if(vis.length===1){target=vis[0];if(FOCUS.activeSeat!==target)FOCUS.cut=true;FOCUS.activeSeat=target;FOCUS.votes=0;}
     else{
       const sorted=vis.slice().sort((a,b)=>b.talk-a.talk);
       const cur=(FOCUS.activeSeat&&vis.includes(FOCUS.activeSeat))?FOCUS.activeSeat:null;
       const cand=sorted[0];
-      if(!cur){FOCUS.activeSeat=cand;FOCUS.votes=0;}
-      else if(cand!==cur&&cand.talk>cur.talk*1.3+0.3){FOCUS.votes++;if(FOCUS.votes>=2){FOCUS.activeSeat=cand;FOCUS.votes=0;}}
+      if(!cur){FOCUS.activeSeat=cand;FOCUS.votes=0;FOCUS.cut=true;}
+      else if(cand!==cur&&cand.talk>cur.talk*1.3+0.3){FOCUS.votes++;if(FOCUS.votes>=2){FOCUS.activeSeat=cand;FOCUS.votes=0;FOCUS.cut=true;}}
       else FOCUS.votes=0;
       target=FOCUS.activeSeat;
     }
@@ -181,17 +185,13 @@ function pickRecorderFormat(){
   }
   return{mime:"video/webm",ext:"webm"};}
 
-/* ================= RENDER ENGINE v23 — TRUE A/V SYNC =================
-   HOW SYNC WORKS NOW:
+/* ================= RENDER ENGINE — TRUE A/V SYNC =================
    • Audio: taken directly from YOUR original file's audio track (element captureStream).
-     It is never decoded/re-made separately — it's the file's own sound, live.
-   • Video: canvas.captureStream(0) + requestFrame() — we PUSH each frame into the
-     recording at the exact moment it's drawn, and we draw via requestVideoFrameCallback,
-     which fires precisely when the browser presents a real decoded frame of your video.
-     So every recorded frame = a real frame of your file, stamped at its true time.
+   • Video: canvas.captureStream(0) + requestFrame() — each frame is PUSHED into the
+     recording the moment it's drawn, drawn via requestVideoFrameCallback which fires
+     exactly when the browser presents a real decoded frame of your video.
    • At every cut start the recorder stays PAUSED until the decoder delivers its first
-     real moving frame — no more frozen video recorded while audio rolls (this was the
-     main cause of \"voice ahead of video\").
+     real moving frame — audio and video restart together, always.
    • No clock-jump hacks: video time is the single source of truth. */
 async function exportClips(){if(S.exporting)return;
   const moments=(S.selected||[]).filter(m=>m.cuts&&m.cuts.length);
@@ -256,7 +256,7 @@ async function exportClips(){if(S.exporting)return;
           else{stuck=0;lastVidT=v;}},250);
         safety=setTimeout(finish,(cutDur+8)*1000);
         function draw(vidT){
-          updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.12;
+          updateFocus(p);focusStep();
           const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);
           const cutT=Math.min(Math.max(srcT-cut.cs,0),cutDur);
           drawFrame(srcT,cut,mi,ci,cutT,cutDur);pushFrame();
