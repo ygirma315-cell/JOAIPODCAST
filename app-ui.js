@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION="v21";
-const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 FIXED: audio no longer drifts away from the picture (Web Audio mux + video clock master)\n\u2022 FIXED: mid-render seeking that caused freezes / lip-sync lag\n\u2022 FIXED: muted-player bug that made captureStream audio unreliable\n\u2022 Smoother export \u2014 frames pushed only when drawn, speakers stay silent\n\u2022 Still MP4-first when the browser supports it";
+const APP_VERSION="v22";
+const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 FIXED: captureStream audio primary (same clock as currentTime, no Web Audio drift)\n\u2022 FIXED: render stutter \u2014 requestVideoFrameCallback captures at source frame rate, no dupes\n\u2022 FIXED: background audio leak during render (player volume=0, captureStream still gets audio)\n\u2022 IMPROVED: multi-face tracking \u2014 cycles between speakers for a natural multi-shot look\n\u2022 Removed 'muted' from player HTML, removed wall-clock 30fps throttle, removed 120ms cut sleep";
 
 /* ================= STEP 4: ANALYZE (single best clip) ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Scanning for the best part"],["score","Scoring virality signals"],["select","Picking the #1 moment"],["refine","Cropping filler to target length"]];
@@ -91,10 +91,11 @@ async function resumeAudioCtx(graph){
   try{if(graph.actx.state==="suspended")await graph.actx.resume();}catch(e){}
 }
 
-/* ================= SPEAKER AUTO-FOCUS (face tracking, downscaled = cheap) ================= */
-const FOCUS={x:0.5,tx:0.5,det:null,busy:false,last:0,enabled:false,cv:null,cctx:null};
-function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.busy=false;FOCUS.last=0;FOCUS.det=null;FOCUS.enabled=false;
-  try{if(opt.focus!==false&&("FaceDetector" in window)){FOCUS.det=new window.FaceDetector({fastMode:true,maxDetectedFaces:4});FOCUS.enabled=true;}}catch(e){FOCUS.det=null;FOCUS.enabled=false;}}
+/* ================= SPEAKER AUTO-FOCUS (multi-face tracking, downscaled = cheap) =================
+   Cycles between detected faces every ~3s so both speakers get screen time (multi-shot look). */
+const FOCUS={x:0.5,tx:0.5,det:null,busy:false,last:0,enabled:false,cv:null,cctx:null,faces:[]};
+function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.busy=false;FOCUS.last=0;FOCUS.det=null;FOCUS.enabled=false;FOCUS.faces=[];
+  try{if(opt.focus!==false&&("FaceDetector" in window)){FOCUS.det=new window.FaceDetector({fastMode:true,maxDetectedFaces:6});FOCUS.enabled=true;}}catch(e){FOCUS.det=null;FOCUS.enabled=false;}}
 function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const now=performance.now();if(now-FOCUS.last<500)return;FOCUS.last=now;FOCUS.busy=true;
   try{
     const vw=p.videoWidth||320,vh=p.videoHeight||180;
@@ -104,11 +105,25 @@ function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const n
     if(!FOCUS.cctx)FOCUS.cctx=FOCUS.cv.getContext("2d",{willReadFrequently:true});
     FOCUS.cctx.drawImage(p,0,0,dw,dh);
     FOCUS.det.detect(FOCUS.cv).then(faces=>{FOCUS.busy=false;if(!faces||!faces.length)return;
-      let best=faces[0];for(const f of faces){if(f.boundingBox.width>best.boundingBox.width)best=f;}
-      const cx=(best.boundingBox.x+best.boundingBox.width/2)/dw;
-      if(isFinite(cx))FOCUS.tx=Math.min(0.92,Math.max(0.08,cx));
+      FOCUS.faces=faces;
     }).catch(()=>{FOCUS.busy=false;});
   }catch(e){FOCUS.busy=false;}}
+
+/* Called every captured frame — applies the multi-face cycling logic */
+function applyFocus(now){
+  if(!FOCUS.enabled||!FOCUS.faces.length)return;
+  const faces=FOCUS.faces;
+  if(faces.length===1){
+    const cx=(faces[0].boundingBox.x+faces[0].boundingBox.width/2)/224;
+    if(isFinite(cx))FOCUS.tx=Math.min(0.92,Math.max(0.08,cx));
+  }else{
+    /* Cycle between speakers every 3s for a natural multi-shot feel */
+    const faceIdx=Math.floor((now/3000)%faces.length);
+    const face=faces[faceIdx];
+    const cx=(face.boundingBox.x+face.boundingBox.width/2)/224;
+    if(isFinite(cx))FOCUS.tx=Math.min(0.92,Math.max(0.08,cx));
+  }
+}
 
 /* ================= CAPTIONS (cached overlay — zero per-frame layout cost) ================= */
 const CAP_MAX_WORDS=6;
@@ -168,7 +183,8 @@ async function exportClips(){if(S.exporting)return;
   $("#export-log").textContent="Preparing renderer\u2026";
   const p=$("#player");
   /* Element must NOT be muted — both captureStream and Web Audio need decoded audio */
-  p.muted=false;p.volume=1;p.playbackRate=1;p.playsInline=true;
+  /* Volume kept at 0 so speakers stay silent during render; captureStream still gets audio */
+  p.muted=false;p.volume=0;p.playbackRate=1;p.playsInline=true;
   if(!p.src||p.src!==S.videoURL){p.src=S.videoURL;p.load();}await waitMeta(p);
   setupFocus(opt);
   let cw=720,ch=1280;if(opt.aspect==="1:1"){cw=720;ch=720;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
@@ -235,8 +251,8 @@ async function exportClips(){if(S.exporting)return;
       try{p.pause();}catch(e){}
       await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;
       await resumeAudioCtx(audioGraph);
-      /* Keep element unmuted so audio graph / captureStream get real samples */
-      p.muted=false;p.volume=1;p.playbackRate=1;
+      /* Keep element unmuted (captureStream needs decoded audio); volume=0 keeps speakers silent */
+      p.muted=false;p.volume=0;p.playbackRate=1;
       try{await p.play();}catch(e){try{await p.play();}catch(e2){}}
       /* Wait for playback to settle (~1 frame), then capture first frame */
       await new Promise(r => {
@@ -271,7 +287,7 @@ async function exportClips(){if(S.exporting)return;
           }
           lastFrameT = vidT;
 
-          updateFocus(p); FOCUS.x += (FOCUS.tx - FOCUS.x) * 0.10;
+          updateFocus(p); applyFocus(nowMs); FOCUS.x += (FOCUS.tx - FOCUS.x) * 0.10;
 
           const srcT = Math.min(Math.max(vidT, cut.cs), cut.ce);
           const cutT = srcT - cut.cs;
