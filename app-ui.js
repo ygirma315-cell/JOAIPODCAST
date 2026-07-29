@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION="v21";
-const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 AI transcribe: ONE stable percentage that never goes backwards\n\u2022 Smart speaker camera: detects both people, follows whoever is TALKING (lip movement), switches turn-by-turn naturally\n\u2022 Never frames the empty desk in the middle \u2014 always locks onto a person\n\u2022 Accepts more video formats (MP4, MOV, WebM, MKV, AVI, M4V)\n\u2022 MP4 output + audio/video locked in sync";
+const APP_VERSION="v22";
+const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 Built-in person detection (our own engine \u2014 works in EVERY browser, no experimental APIs)\n\u2022 Camera follows whoever is TALKING and switches turn-by-turn, never frames the empty desk\n\u2022 AI transcribe: ONE stable percentage that never goes backwards\n\u2022 Accepts more video formats (MP4, MOV, WebM, MKV, AVI, M4V)\n\u2022 MP4 output + audio/video locked in sync";
 
 /* ================= STEP 4: ANALYZE (single best clip) ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Scanning for the best part"],["score","Scoring virality signals"],["select","Picking the #1 moment"],["refine","Cropping filler to target length"]];
@@ -68,66 +68,83 @@ async function startRender(){goStep(5);
 function waitMeta(p){return new Promise(r=>{if(p.readyState>=1&&p.videoWidth)return r();const done=()=>{p.removeEventListener("loadedmetadata",done);p.removeEventListener("loadeddata",done);r();};p.addEventListener("loadedmetadata",done);p.addEventListener("loadeddata",done);setTimeout(done,8000);});}
 function seekTo(p,t){return new Promise(resolve=>{const target=Math.max(0,Math.min(t,(p.duration||t)-0.05));if(Math.abs((p.currentTime||0)-target)<0.05&&p.readyState>=2){resolve();return;}let settled=false;const finish=()=>{if(settled)return;settled=true;p.removeEventListener("seeked",onSeek);p.removeEventListener("loadeddata",onSeek);clearTimeout(to);resolve();};const onSeek=()=>finish();p.addEventListener("seeked",onSeek);p.addEventListener("loadeddata",onSeek);try{p.pause();}catch(e){}try{p.currentTime=target;}catch(e){finish();return;}const to=setTimeout(finish,2500);});}
 
-/* ================= SMART SPEAKER CAMERA v2 =================
-   Detects ALL faces (both podcast hosts), remembers their "seats" (left/right),
-   measures LIP MOVEMENT on each face to figure out who is actually talking,
-   and points the vertical crop at that person — switching turn-by-turn with
-   hysteresis so it feels like a natural multi-cam edit. It NEVER parks the
-   frame on the empty middle/desk: the camera is always locked to a person. */
-const FOCUS={x:0.5,tx:0.5,det:null,busy:false,last:0,enabled:false,cv:null,cctx:null,seats:[],activeSeat:null,votes:0};
-function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.busy=false;FOCUS.last=0;FOCUS.det=null;FOCUS.enabled=false;FOCUS.seats=[];FOCUS.activeSeat=null;FOCUS.votes=0;
-  try{if(opt.focus!==false&&("FaceDetector" in window)){FOCUS.det=new window.FaceDetector({fastMode:true,maxDetectedFaces:4});FOCUS.enabled=true;}}catch(e){FOCUS.det=null;FOCUS.enabled=false;}}
-function mouthMotion(ctx,seat,bx,by,bw,bh,dw,dh){
-  /* sample the mouth area (lower part of the face box) and compare with the
-     previous sample — lots of pixel change there = this person is talking */
-  const mx=Math.max(0,Math.min(dw-5,Math.round(bx+bw*0.2))),my=Math.max(0,Math.min(dh-5,Math.round(by+bh*0.55)));
-  const mw=Math.max(4,Math.min(dw-mx,Math.round(bw*0.6))),mh=Math.max(4,Math.min(dh-my,Math.round(bh*0.42)));
-  let img;try{img=ctx.getImageData(mx,my,mw,mh);}catch(e){return 0;}
-  const data=img.data;const cur=[];
-  const step=Math.max(1,Math.floor(data.length/4/300))*4;
-  for(let i=0;i<data.length;i+=step)cur.push((data[i]+data[i+1]+data[i+2])/3);
-  let m=0;
-  if(seat.prevMouth&&seat.prevMouth.length===cur.length){let sum=0;for(let i=0;i<cur.length;i++)sum+=Math.abs(cur[i]-seat.prevMouth[i]);m=sum/cur.length;}
-  seat.prevMouth=cur;return m;}
-function updateFocus(p){if(!FOCUS.enabled||!FOCUS.det||FOCUS.busy)return;const now=performance.now();if(now-FOCUS.last<400)return;FOCUS.last=now;FOCUS.busy=true;
+/* ================= SMART SPEAKER CAMERA v3 — OUR OWN DETECTION ENGINE =================
+   No FaceDetector API (it only exists on some Chrome builds). Instead we run our own
+   computer-vision pass on a tiny 112px copy of the frame every ~0.35s:
+   1. SKIN DETECTION — each pixel is tested with RGB + YCbCr skin-tone rules; skin
+      pixels vote for their column (upper rows count more, faces live up there).
+   2. MOTION DETECTION — per-column brightness difference vs the previous sample;
+      a talking person's mouth/head/hands create motion in their columns.
+   3. The column votes are clustered into person \"blobs\" → stable seats (left host,
+      right host). If skin fails (B&W footage etc.) we cluster on motion instead.
+   4. Whoever's seat has the most motion is the SPEAKER — the crop locks onto them
+      and switches turn-by-turn with hysteresis, like a natural multicam edit.
+   The camera never parks on the empty middle/desk: it always aims at a person. */
+const FOCUS={x:0.5,tx:0.5,enabled:false,last:0,cv:null,cctx:null,prevLum:null,seats:[],activeSeat:null,votes:0};
+function setupFocus(opt){FOCUS.x=0.5;FOCUS.tx=0.5;FOCUS.last=0;FOCUS.prevLum=null;FOCUS.seats=[];FOCUS.activeSeat=null;FOCUS.votes=0;FOCUS.enabled=opt.focus!==false;}
+function focusResetMotion(){FOCUS.prevLum=null;}
+function updateFocus(p){if(!FOCUS.enabled||!p.videoWidth)return;const now=performance.now();if(now-FOCUS.last<350)return;const gap=now-FOCUS.last;FOCUS.last=now;
   try{
-    const vw=p.videoWidth||320,vh=p.videoHeight||180;
-    const dw=224,dh=Math.max(2,Math.round(dw*vh/vw));
-    if(!FOCUS.cv){FOCUS.cv=document.createElement("canvas");}
-    if(FOCUS.cv.width!==dw||FOCUS.cv.height!==dh){FOCUS.cv.width=dw;FOCUS.cv.height=dh;FOCUS.cctx=FOCUS.cv.getContext("2d",{willReadFrequently:true});}
+    const vw=p.videoWidth,vh=p.videoHeight;
+    const dw=112,dh=Math.max(8,Math.round(dw*vh/vw));
+    if(!FOCUS.cv)FOCUS.cv=document.createElement("canvas");
+    if(FOCUS.cv.width!==dw||FOCUS.cv.height!==dh){FOCUS.cv.width=dw;FOCUS.cv.height=dh;FOCUS.cctx=FOCUS.cv.getContext("2d",{willReadFrequently:true});FOCUS.prevLum=null;}
     if(!FOCUS.cctx)FOCUS.cctx=FOCUS.cv.getContext("2d",{willReadFrequently:true});
     FOCUS.cctx.drawImage(p,0,0,dw,dh);
-    FOCUS.det.detect(FOCUS.cv).then(faces=>{FOCUS.busy=false;
-      for(const s of FOCUS.seats)s.seen=false;
-      for(const f of (faces||[])){const b=f.boundingBox;const cx=(b.x+b.width/2)/dw;if(!isFinite(cx))continue;
-        /* match this face to a known seat (a host's usual position) */
-        let seat=null,best=0.14;
-        for(const s of FOCUS.seats){const d=Math.abs(s.x-cx);if(d<best){best=d;seat=s;}}
-        if(!seat){seat={x:cx,talk:0,prevMouth:null,miss:0};FOCUS.seats.push(seat);}
-        seat.x=seat.x*0.6+cx*0.4;seat.seen=true;seat.miss=0;
-        const m=mouthMotion(FOCUS.cctx,seat,b.x,b.y,b.width,b.height,dw,dh);
-        seat.talk=seat.talk*0.55+m*0.45; /* smoothed talking score */
-      }
-      for(const s of FOCUS.seats)if(!s.seen)s.miss=(s.miss||0)+1;
-      FOCUS.seats=FOCUS.seats.filter(s=>s.miss<10);
-      const vis=FOCUS.seats.filter(s=>s.miss<3);
-      if(!vis.length)return; /* nobody visible — hold current framing */
-      let target=null;
-      if(vis.length===1){target=vis[0];FOCUS.activeSeat=target;FOCUS.votes=0;}
-      else{
-        /* two or more people: follow whoever is talking, switch with hysteresis
-           so the "camera" changes turn-by-turn, not jittery — and never the middle */
-        const sorted=vis.slice().sort((a,b)=>b.talk-a.talk);
-        let cur=FOCUS.activeSeat&&vis.includes(FOCUS.activeSeat)?FOCUS.activeSeat:null;
-        const cand=sorted[0];
-        if(!cur){FOCUS.activeSeat=cand;FOCUS.votes=0;}
-        else if(cand!==cur&&cand.talk>cur.talk*1.35+0.4){FOCUS.votes++;if(FOCUS.votes>=2){FOCUS.activeSeat=cand;FOCUS.votes=0;}}
-        else FOCUS.votes=0;
-        target=FOCUS.activeSeat;
-      }
-      if(target)FOCUS.tx=Math.min(0.92,Math.max(0.08,target.x));
-    }).catch(()=>{FOCUS.busy=false;});
-  }catch(e){FOCUS.busy=false;}}
+    const img=FOCUS.cctx.getImageData(0,0,dw,dh).data;
+    const skinCol=new Float32Array(dw),motCol=new Float32Array(dw);
+    const lum=new Float32Array(dw*dh);
+    const usePrev=!!(FOCUS.prevLum&&FOCUS.prevLum.length===dw*dh&&gap<1200);
+    for(let y=0;y<dh;y++){
+      const rowW=y<dh*0.62?1.25:0.45;
+      for(let x=0;x<dw;x++){
+        const idx=y*dw+x,i=idx*4,r=img[i],g=img[i+1],b=img[i+2];
+        const L=(r*2+g*5+b)/8;lum[idx]=L;
+        const cb=128-0.168736*r-0.331264*g+0.5*b;
+        const cr=128+0.5*r-0.418688*g-0.081312*b;
+        if(r>60&&g>30&&b>15&&r>b&&(r-g)>8&&cb>=77&&cb<=127&&cr>=133&&cr<=177)skinCol[x]+=rowW;
+        if(usePrev)motCol[x]+=Math.abs(L-FOCUS.prevLum[idx]);
+      }}
+    FOCUS.prevLum=lum;
+    const smooth=a=>{const o=new Float32Array(dw);for(let x=0;x<dw;x++){let s=0,c=0;for(let k=-3;k<=3;k++){const j=x+k;if(j>=0&&j<dw){s+=a[j];c++;}}o[x]=s/c;}return o;};
+    const sk=smooth(skinCol),mo=smooth(motCol);
+    let skinMass=0;for(let x=0;x<dw;x++)skinMass+=sk[x];
+    const map=skinMass>dh*1.5?sk:(usePrev?mo:sk); /* fall back to motion if skin finds nothing */
+    let tot=0,mx=0;for(let x=0;x<dw;x++){tot+=map[x];if(map[x]>mx)mx=map[x];}
+    if(mx<=0)return;
+    const thr=Math.max((tot/dw)*1.25,mx*0.3);
+    const blobs=[];let cs=-1;
+    for(let x=0;x<=dw;x++){const on=x<dw&&map[x]>=thr;
+      if(on&&cs<0)cs=x;
+      if(!on&&cs>=0){if(x-cs>=3){let m=0,cxs=0,mt=0;for(let j=cs;j<x;j++){m+=map[j];cxs+=map[j]*j;mt+=mo[j];}blobs.push({x:(cxs/m)/dw,mass:m,mot:mt/(x-cs)});}cs=-1;}}
+    if(!blobs.length)return;
+    blobs.sort((a,b)=>b.mass-a.mass);
+    const top=blobs.slice(0,3);
+    for(const s of FOCUS.seats)s.seen=false;
+    for(const bl of top){
+      let seat=null,bd=0.13;
+      for(const s of FOCUS.seats){const d=Math.abs(s.x-bl.x);if(d<bd){bd=d;seat=s;}}
+      if(!seat){seat={x:bl.x,talk:0,miss:0};FOCUS.seats.push(seat);}
+      seat.x=seat.x*0.65+bl.x*0.35;seat.seen=true;seat.miss=0;
+      seat.talk=seat.talk*0.55+(usePrev?bl.mot:0)*0.45;
+    }
+    for(const s of FOCUS.seats)if(!s.seen)s.miss=(s.miss||0)+1;
+    FOCUS.seats=FOCUS.seats.filter(s=>s.miss<10);
+    const vis=FOCUS.seats.filter(s=>s.miss<3);
+    if(!vis.length)return;
+    let target=null;
+    if(vis.length===1){target=vis[0];FOCUS.activeSeat=target;FOCUS.votes=0;}
+    else{
+      const sorted=vis.slice().sort((a,b)=>b.talk-a.talk);
+      const cur=(FOCUS.activeSeat&&vis.includes(FOCUS.activeSeat))?FOCUS.activeSeat:null;
+      const cand=sorted[0];
+      if(!cur){FOCUS.activeSeat=cand;FOCUS.votes=0;}
+      else if(cand!==cur&&cand.talk>cur.talk*1.3+0.3){FOCUS.votes++;if(FOCUS.votes>=2){FOCUS.activeSeat=cand;FOCUS.votes=0;}}
+      else FOCUS.votes=0;
+      target=FOCUS.activeSeat;
+    }
+    if(target)FOCUS.tx=Math.min(0.92,Math.max(0.08,target.x));
+  }catch(e){}}
 
 /* ================= CAPTIONS (cached overlay — zero per-frame layout cost) ================= */
 const CAP_MAX_WORDS=6;
@@ -197,7 +214,7 @@ async function exportClips(){if(S.exporting)return;
     for(let ci=0;ci<cuts.length&&!S.cancelExport;ci++){const cut=cuts[ci];cutIndex++;const cutDur=Math.max(cut.ce-cut.cs,0.2);
       $("#export-log").textContent="\ud83c\udfac Rendering cut "+cutIndex+"/"+totalCutsAll+" \u00b7 "+fmtTime(rendered)+" / "+fmtTime(planned);
       recPause();
-      await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;
+      await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;focusResetMotion();
       try{p.muted=true;p.volume=0;await p.play();}catch(e){}
       drawFrame(Math.max(p.currentTime,cut.cs),cut,mi,ci,0,cutDur);
       recResume();
@@ -244,11 +261,9 @@ function setAiProgress(msg,pct){
   const st=$("#ai-status"),bar=$("#ai-bar"),lab=$("#ai-pct"),wrap=$("#ai-prog");
   if(wrap)wrap.classList.add("show");
   let p=Math.round(Math.min(100,Math.max(0,pct==null?0:pct)));
-  /* monotonic guard: the shown percentage can only go UP during one run */
   if(p<(S._aiPct||0))p=S._aiPct;else S._aiPct=p;
   if(bar)bar.style.width=p+"%";
   if(lab)lab.textContent=p+"%";
-  /* status text is words only — the ONLY percentage on screen is the one above */
   if(st)st.textContent=(p>=100?"\u2705 ":"\u23f3 ")+(msg||"Working")+(p>=100?"":"\u2026");
 }
 
@@ -276,7 +291,7 @@ function boot(){
     const btn=$("#ai-transcribe"),useBtn=$("#use-ai"),wrap=$("#ai-prog");
     btn.disabled=true;if(useBtn)useBtn.style.display="none";
     if(wrap)wrap.classList.add("show");
-    S._aiPct=0; /* reset the monotonic percentage for this run */
+    S._aiPct=0;
     setAiProgress("Starting",2);
     try{
       const sents=await transcribeWithDeepgram(S.videoFile,(msg,pct)=>setAiProgress(msg,pct));
