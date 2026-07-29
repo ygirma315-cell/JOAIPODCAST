@@ -15,6 +15,21 @@
 .ver-btn:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(37,99,235,.5); }
 @keyframes verPulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 @media (max-width:560px){ .ver-btn{ margin-left:6px; padding:3px 8px; font-size:10px; } }
+/* ---- PROMO CODE (Pro pane) ---- */
+.promo-divider { display:flex; align-items:center; gap:10px; margin-top:2px; color:rgba(255,255,255,.65); font-size:12px; font-weight:600; }
+.promo-divider::before, .promo-divider::after { content:""; flex:1; height:1px; background:rgba(255,255,255,.22); }
+#promo-form { display:flex; gap:8px; }
+#promo-form input { flex:1; min-width:0; padding:12px 14px; border-radius:12px; border:1px solid rgba(255,255,255,.28); background:rgba(255,255,255,.1); color:#fff; font:inherit; font-size:15px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; -webkit-appearance:none; }
+#promo-form input::placeholder { color:rgba(255,255,255,.5); font-weight:400; letter-spacing:0; text-transform:none; }
+#promo-form input:focus { outline:none; border-color:#93C5FD; background:rgba(255,255,255,.16); }
+.promo-btn { padding:12px 18px; border:0; border-radius:12px; background:linear-gradient(135deg,#F59E0B,#F97316); color:#fff; font-weight:800; font-size:14px; cursor:pointer; box-shadow:0 6px 18px rgba(245,158,11,.4); transition:all .2s ease; white-space:nowrap; touch-action:manipulation; }
+.promo-btn:hover { transform:translateY(-1px); box-shadow:0 10px 24px rgba(245,158,11,.5); }
+#promo-err { min-height:16px; font-size:12.5px; color:#FCA5A5; font-weight:600; }
+#login-gate.light .promo-divider { color:#5B6B84; }
+#login-gate.light .promo-divider::before, #login-gate.light .promo-divider::after { background:#DCE6F5; }
+#login-gate.light #promo-form input { background:#fff; border-color:#C9D9F0; color:#0F172A; }
+#login-gate.light #promo-form input::placeholder { color:#93A3BC; }
+#login-gate.light #promo-err { color:#DC2626; }
 </style>
 </head>
 <body>
@@ -53,6 +68,12 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#fff" fill-opacity=".18"/><path d="M17.5 6.7 5.9 11.2c-.8.3-.8.8-.1 1l2.9.9 1.1 3.4c.1.4.3.5.6.5.4 0 .5-.2.7-.4l1.4-1.4 3 2.2c.5.3.9.1 1-.5l2-9.3c.2-.8-.3-1.2-1-.9z" fill="#fff"/></svg>
         Contact the owner @grpbuyer3
       </a>
+      <div class="promo-divider">🎟️ or redeem a promo code</div>
+      <form id="promo-form" autocomplete="off">
+        <input type="text" id="promo-code" placeholder="Enter promo code" required>
+        <button type="submit" class="promo-btn">Redeem →</button>
+      </form>
+      <div id="promo-err"></div>
       <p class="login-foot">You'll get set up personally on Telegram 💬</p>
     </div>
     <div id="pane-free" style="display:none">
@@ -75,7 +96,7 @@
   <div class="brand">
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="3" fill="#2563EB"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="#fff"/></svg>
     ClipForge
-    <button class="ver-btn" id="ver-btn" type="button" title="Click to see what's new">v26 · latest</button>
+    <button class="ver-btn" id="ver-btn" type="button" title="Click to see what's new">v27 · latest</button>
     <span class="tagline">— AI podcast clipper, 100% in your browser</span>
   </div>
   <div class="top-right">
@@ -258,5 +279,43 @@
 
 <script src="app-core.js?v=26"></script>
 <script src="app-ui.js?v=26"></script>
+<script>
+/* ---- Promo code redemption (temporary code, easy to change) ---- */
+(function(){
+  var f=document.getElementById("promo-form");
+  if(!f)return;
+  /* Temporary promo code: JOPRO100 (stored encoded; spaces/dashes and case are ignored) */
+  var PROMO_K="am9wcm8xMDA=";
+  f.addEventListener("submit",function(e){
+    e.preventDefault();
+    var inp=document.getElementById("promo-code");
+    var v=(inp.value||"").trim().toLowerCase().replace(/[\s\-_]/g,"");
+    var ok=false;
+    try{ok=btoa(v)===PROMO_K;}catch(err){ok=false;}
+    var em=document.getElementById("promo-err");
+    var card=document.getElementById("login-card");
+    if(ok){
+      em.style.color="#4ADE80";
+      em.textContent="\u2705 Promo code accepted \u2014 welcome to Pro!";
+      try{localStorage.setItem("vs_member","1");}catch(e2){}
+      setTimeout(function(){
+        var g=document.getElementById("login-gate");
+        g.classList.add("fade-out");
+        setTimeout(function(){g.classList.add("hidden");document.body.style.overflow="";},650);
+        var lo=document.getElementById("logout");
+        if(lo)lo.style.display="inline-flex";
+      },600);
+    }else{
+      em.style.color="";
+      card.classList.remove("shake");
+      void card.offsetWidth;
+      card.classList.add("shake");
+      em.textContent="That promo code isn't valid or has expired \u274c";
+      inp.value="";
+      inp.focus();
+    }
+  });
+})();
+</script>
 </body>
 </html>
