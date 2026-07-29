@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION="v22";
-const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 FIXED: captureStream audio primary (same clock as currentTime, no Web Audio drift)\n\u2022 FIXED: render stutter \u2014 requestVideoFrameCallback captures at source frame rate, no dupes\n\u2022 FIXED: background audio leak during render (player volume=0, captureStream still gets audio)\n\u2022 IMPROVED: multi-face tracking \u2014 cycles between speakers for a natural multi-shot look\n\u2022 Removed 'muted' from player HTML, removed wall-clock 30fps throttle, removed 120ms cut sleep";
+const APP_VERSION="v23";
+const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 CRITICAL FIX: render no longer stuck at 0% \u2014 removed rVFC (unreliable across browsers), now using rAF+dedup which always fires\n\u2022 CRITICAL FIX: smart-wait timeout (300ms safety) prevents hang if autoplay is blocked\n\u2022 FIX: ReferenceError crash (nowMs was undefined in captureFrame scope)\n\u2022 FIXED: captureStream audio primary (same clock as currentTime, no Web Audio drift)\n\u2022 FIXED: render stutter \u2014 dedup captures at source frame rate, no dupes\n\u2022 FIXED: background audio leak during render (player volume=0, captureStream still gets audio)\n\u2022 IMPROVED: multi-face tracking \u2014 cycles between speakers for a natural multi-shot look";
 
 /* ================= STEP 4: ANALYZE (single best clip) ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Scanning for the best part"],["score","Scoring virality signals"],["select","Picking the #1 moment"],["refine","Cropping filler to target length"]];
@@ -254,11 +254,12 @@ async function exportClips(){if(S.exporting)return;
       /* Keep element unmuted (captureStream needs decoded audio); volume=0 keeps speakers silent */
       p.muted=false;p.volume=0;p.playbackRate=1;
       try{await p.play();}catch(e){try{await p.play();}catch(e2){}}
-      /* Wait for playback to settle (~1 frame), then capture first frame */
+      /* Wait for playback to settle (~1 frame, max 300ms safety timeout) */
       await new Promise(r => {
+        const to = setTimeout(r, 300);
         const chk = () => {
-          if (S.cancelExport) { r(); return; }
-          if (p.currentTime > cut.cs + 0.03) r();
+          if (S.cancelExport) { clearTimeout(to); r(); return; }
+          if (p.currentTime > cut.cs + 0.03) { clearTimeout(to); r(); }
           else requestAnimationFrame(chk);
         };
         requestAnimationFrame(chk);
@@ -267,10 +268,8 @@ async function exportClips(){if(S.exporting)return;
       drawFrame(Math.max(p.currentTime, cut.cs), cut, mi, ci, 0, cutDur);
       recResume();
 
-      /* Use requestVideoFrameCallback when available — fires exactly when a new
-         video frame is decoded, so we capture at the source's native frame rate
-         (23.976, 29.97, 30, 60…) with no duplicate or skipped frames. */
-      const hasVFC = typeof p.requestVideoFrameCallback === 'function';
+      /* Capture at source frame rate via rAF + dedup (reliable across all browsers).
+         Only push a frame when currentTime actually advances — no duplicates. */
       let lastFrameT = p.currentTime;
       const wall0 = performance.now();
 
@@ -278,16 +277,14 @@ async function exportClips(){if(S.exporting)return;
         function captureFrame() {
           if (S.cancelExport) { resolve(); return; }
 
-          /* Only push a frame when video actually advances — no dupes */
           const vidT = p.currentTime;
           if (vidT - lastFrameT < 0.0005) {
-            if (hasVFC) p.requestVideoFrameCallback(captureFrame);
-            else requestAnimationFrame(captureFrame);
+            requestAnimationFrame(captureFrame);
             return;
           }
           lastFrameT = vidT;
 
-          updateFocus(p); applyFocus(nowMs); FOCUS.x += (FOCUS.tx - FOCUS.x) * 0.10;
+          updateFocus(p); applyFocus(performance.now()); FOCUS.x += (FOCUS.tx - FOCUS.x) * 0.10;
 
           const srcT = Math.min(Math.max(vidT, cut.cs), cut.ce);
           const cutT = srcT - cut.cs;
@@ -303,11 +300,9 @@ async function exportClips(){if(S.exporting)return;
           const doneByWall = (performance.now() - wall0) / 1000 >= cutDur + 2.5;
           if (doneByVid || ended || doneByWall) { resolve(); return; }
 
-          if (hasVFC) p.requestVideoFrameCallback(captureFrame);
-          else requestAnimationFrame(captureFrame);
+          requestAnimationFrame(captureFrame);
         }
-        if (hasVFC) p.requestVideoFrameCallback(captureFrame);
-        else requestAnimationFrame(captureFrame);
+        requestAnimationFrame(captureFrame);
       });
 
       try{p.pause();}catch(e){}
