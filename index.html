@@ -5,14 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>AI Podcast Clipper — Turn podcasts into viral shorts</title>
 <meta name="description" content="Turn long podcasts & videos into viral short clips — right in your browser.">
-<link rel="stylesheet" href="styles.css?v=25">
+<link rel="stylesheet" href="styles.css?v=26">
 <style>
 #final-player { display:block; margin:0 auto; width:auto; max-width:100%; max-height:72vh; border-radius:var(--radius-lg); background:#000; border:1px solid var(--border); box-shadow:var(--shadow); animation:popIn .45s ease both; }
 #player { position:fixed; left:-9999px; top:0; width:320px; height:180px; opacity:0; pointer-events:none; z-index:-1; }
 .st-pct { margin-left:auto; font-size:12px; font-weight:700; color:var(--blue); min-width:34px; text-align:right; }
-.ver-btn { display:inline-flex; align-items:center; gap:5px; margin-left:10px; padding:3px 10px; font-size:11px; font-weight:800; letter-spacing:.3px; color:#fff; background:linear-gradient(135deg,#2783DE,#7C3AED); border:none; border-radius:999px; cursor:pointer; box-shadow:0 2px 8px rgba(39,131,222,.35); transition:transform .15s ease, box-shadow .15s ease; white-space:nowrap; }
+.ver-btn { display:inline-flex; align-items:center; gap:5px; margin-left:10px; padding:3px 10px; font-size:11px; font-weight:800; letter-spacing:.3px; color:#fff; background:linear-gradient(135deg,#2563EB,#60A5FA); border:none; border-radius:999px; cursor:pointer; box-shadow:0 2px 8px rgba(37,99,235,.35); transition:transform .15s ease, box-shadow .15s ease; white-space:nowrap; }
 .ver-btn::before { content:""; width:7px; height:7px; border-radius:50%; background:#4ADE80; box-shadow:0 0 6px #4ADE80; animation:verPulse 1.6s ease-in-out infinite; }
-.ver-btn:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(39,131,222,.5); }
+.ver-btn:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(37,99,235,.5); }
 @keyframes verPulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 @media (max-width:560px){ .ver-btn{ margin-left:6px; padding:3px 8px; font-size:10px; } }
 </style>
@@ -25,7 +25,7 @@
   <div class="login-card" id="login-card">
     <button id="theme-toggle" type="button" title="Toggle theme">☀️</button>
     <div class="login-logo">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="3" fill="#2783DE"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="#fff"/></svg>
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="3" fill="#2563EB"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="#fff"/></svg>
       ClipForge
     </div>
     <h1>AI Podcast Clipper ✂️</h1>
@@ -73,9 +73,9 @@
 <!-- ================= APP ================= -->
 <header class="topbar">
   <div class="brand">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="3" fill="#2783DE"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="#fff"/></svg>
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="3" fill="#2563EB"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="#fff"/></svg>
     ClipForge
-    <button class="ver-btn" id="ver-btn" type="button" title="Click to see what's new">v25 · latest</button>
+    <button class="ver-btn" id="ver-btn" type="button" title="Click to see what's new">v26 · latest</button>
     <span class="tagline">— AI podcast clipper, 100% in your browser</span>
   </div>
   <div class="top-right">
@@ -256,7 +256,7 @@
 
 <footer class="foot">ClipForge · AI Podcast Clipper — runs 100% in your browser, no uploads, no servers 💻</footer>
 
-<script src="app-core.js?v=25"></script>
-<script src="app-ui.js?v=25"></script>
+<script src="app-core.js?v=26"></script>
+<script src="app-ui.js?v=26"></script>
 </body>
 </html>
