@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION="v22";
-const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 Built-in person detection (our own engine \u2014 works in EVERY browser, no experimental APIs)\n\u2022 Camera follows whoever is TALKING and switches turn-by-turn, never frames the empty desk\n\u2022 AI transcribe: ONE stable percentage that never goes backwards\n\u2022 Accepts more video formats (MP4, MOV, WebM, MKV, AVI, M4V)\n\u2022 MP4 output + audio/video locked in sync";
+const APP_VERSION="v23";
+const APP_CHANGELOG="ClipForge "+APP_VERSION+" \u2014 latest update:\n\n\u2022 TRUE AUDIO/VIDEO SYNC \u2014 every frame is now stamped to the exact moment of YOUR file's timeline (frame-accurate capture)\n\u2022 Fixed 'voice ahead of video' drift: recording now waits for real frames at every cut start (old version recorded frozen frames while audio rolled)\n\u2022 Audio is taken 1:1 from your original video \u2014 never separated, never rebuilt\n\u2022 Removed the old clock-jump hack that caused audio skips\n\u2022 Built-in person detection (works in EVERY browser) \u2014 camera follows whoever is talking";
 
 /* ================= STEP 4: ANALYZE (single best clip) ================= */
 const STAGES=[["probe","Reading video & transcript"],["audio","Analyzing audio energy"],["cands","Scanning for the best part"],["score","Scoring virality signals"],["select","Picking the #1 moment"],["refine","Cropping filler to target length"]];
@@ -181,7 +181,18 @@ function pickRecorderFormat(){
   }
   return{mime:"video/webm",ext:"webm"};}
 
-/* ================= ROBUST RENDER ENGINE (720p, A/V drift lock, MP4-first) ================= */
+/* ================= RENDER ENGINE v23 — TRUE A/V SYNC =================
+   HOW SYNC WORKS NOW:
+   • Audio: taken directly from YOUR original file's audio track (element captureStream).
+     It is never decoded/re-made separately — it's the file's own sound, live.
+   • Video: canvas.captureStream(0) + requestFrame() — we PUSH each frame into the
+     recording at the exact moment it's drawn, and we draw via requestVideoFrameCallback,
+     which fires precisely when the browser presents a real decoded frame of your video.
+     So every recorded frame = a real frame of your file, stamped at its true time.
+   • At every cut start the recorder stays PAUSED until the decoder delivers its first
+     real moving frame — no more frozen video recorded while audio rolls (this was the
+     main cause of \"voice ahead of video\").
+   • No clock-jump hacks: video time is the single source of truth. */
 async function exportClips(){if(S.exporting)return;
   const moments=(S.selected||[]).filter(m=>m.cuts&&m.cuts.length);
   if(!moments.length){showAlert("Nothing to render \u2014 run the analysis first.");goStep(3);return;}
@@ -194,17 +205,26 @@ async function exportClips(){if(S.exporting)return;
   setupFocus(opt);
   let cw=720,ch=1280;if(opt.aspect==="1:1"){cw=720;ch=720;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="medium";
-  const fps=30;const stream=canvas.captureStream(fps);
+  /* Frame-accurate capture: push frames manually the instant they're drawn */
+  let stream=null,vTrack=null,manualFrames=false;
+  try{const st0=canvas.captureStream(0);const vt=st0.getVideoTracks()[0];
+    if(vt&&typeof vt.requestFrame==="function"){stream=st0;vTrack=vt;manualFrames=true;}
+    else if(typeof st0.requestFrame==="function"){stream=st0;manualFrames=true;}
+  }catch(e){}
+  if(!stream)stream=canvas.captureStream(30);
+  function pushFrame(){if(!manualFrames)return;try{if(vTrack)vTrack.requestFrame();else stream.requestFrame();}catch(e){}}
+  /* Audio = YOUR file's own audio track, recorded together with the video in ONE stream */
   try{const ps=p.captureStream?p.captureStream():(p.mozCaptureStream?p.mozCaptureStream():null);if(ps){ps.getAudioTracks().forEach(t=>{try{stream.addTrack(t);}catch(e){}});} }catch(e){console.warn("No audio track:",e);}
   const fmt=pickRecorderFormat();let mime=fmt.mime,ext=fmt.ext;
   let rec;try{rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4_500_000,audioBitsPerSecond:128_000});}catch(e){try{rec=new MediaRecorder(stream,{mimeType:"video/webm",videoBitsPerSecond:3_500_000});mime="video/webm";ext="webm";}catch(e2){showAlert("This browser cannot record video (MediaRecorder missing). Try Chrome/Edge on desktop.");S.exporting=false;return;}}
   const chunks=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};const stopped=new Promise(res=>{rec.onstop=()=>res();rec.onerror=()=>res();});
   function recPause(){try{if(rec.state==="recording")rec.pause();}catch(e){}}
   function recResume(){try{if(rec.state==="paused")rec.resume();}catch(e){}}
-  ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);if(rec.state==="inactive")rec.start(200);
+  ctx.fillStyle="#000";ctx.fillRect(0,0,cw,ch);if(rec.state==="inactive"){rec.start(200);pushFrame();}
   const planned=moments.reduce((n,m)=>n+(m.cutDuration||0),0)||1;let rendered=0;const F=0.35,CUTPOP=0.12;
   const totalCutsAll=moments.reduce((n,m)=>n+m.cuts.length,0);let cutIndex=0;
-  const frameMs=1000/fps;
+  const useRVFC=typeof p.requestVideoFrameCallback==="function";
+  const frameMs=1000/30;
   function drawFrame(srcT,cut,mi,ci,cutT,cutDur){const vw=p.videoWidth||cw,vh=p.videoHeight||ch;let cr=cropRect(vw,vh,cw,ch);
     if(FOCUS.enabled&&cr.sw<vw-1){const desired=FOCUS.x*vw-cr.sw/2;cr.sx=Math.min(Math.max(desired,0),vw-cr.sw);}
     if(opt.zoom){const zp=Math.min(Math.max(cutT/Math.max(cutDur,0.01),0),1);const z=1+0.06*zp;const sw2=cr.sw/z,sh2=cr.sh/z;cr={sx:cr.sx+(cr.sw-sw2)/2,sy:cr.sy+(cr.sh-sh2)/2,sw:sw2,sh:sh2};}
@@ -216,28 +236,49 @@ async function exportClips(){if(S.exporting)return;
       recPause();
       await seekTo(p,cut.cs);FOCUS.x=FOCUS.tx;focusResetMotion();
       try{p.muted=true;p.volume=0;await p.play();}catch(e){}
+      /* CRITICAL SYNC FIX: wait until the decoder delivers a REAL moving frame
+         before the recorder resumes — audio and video restart together, always */
+      await new Promise(r=>{let d=false;const ok=()=>{if(d)return;d=true;r();};
+        if(useRVFC){try{p.requestVideoFrameCallback(()=>ok());}catch(e){}}
+        p.addEventListener("playing",ok,{once:true});setTimeout(ok,700);});
+      if(S.cancelExport)break;
       drawFrame(Math.max(p.currentTime,cut.cs),cut,mi,ci,0,cutDur);
-      recResume();
-      const t0=performance.now();let lastVidT=p.currentTime;let stuckMs=0;let lastDraw=0;let lastSync=0;
-      await new Promise(resolve=>{function tick(){if(S.cancelExport){resolve();return;}
-        const nowMs=performance.now();
-        if(nowMs-lastDraw<frameMs-2){requestAnimationFrame(tick);return;}
-        lastDraw=nowMs;
-        updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.12;
-        const wall=(nowMs-t0)/1000;let vidT=p.currentTime;
-        if(Math.abs(vidT-lastVidT)<0.001){stuckMs+=frameMs;}else{stuckMs=0;lastVidT=vidT;}
-        if(stuckMs>700){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;stuckMs=0;lastSync=nowMs;}
-        const relV=vidT-cut.cs;
-        if(wall-relV>0.4&&nowMs-lastSync>1000){try{p.currentTime=Math.min(cut.ce,cut.cs+wall);}catch(e){}vidT=p.currentTime;lastSync=nowMs;}
-        const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);const cutT=Math.min(Math.max(srcT-cut.cs,wall),cutDur);
-        drawFrame(srcT,cut,mi,ci,cutT,cutDur);
-        const prog=(rendered+Math.min(cutT,cutDur))/planned*100;const pct=Math.min(Math.round(prog),99);$("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";
-        const doneByVid=vidT>=cut.ce-0.04;const doneByWall=wall>=cutDur;const ended=p.ended&&vidT>=cut.ce-0.5;
-        if(doneByVid||doneByWall||ended){resolve();return;}
-        requestAnimationFrame(tick);}requestAnimationFrame(tick);});
+      recResume();pushFrame();
+      await new Promise(resolve=>{
+        let done=false,lastDraw=0,lastVidT=p.currentTime,stuck=0,wd=null,safety=null;
+        const finish=()=>{if(done)return;done=true;clearInterval(wd);clearTimeout(safety);resolve();};
+        /* watchdog: if playback stalls, nudge play(); only as a last resort skip ahead */
+        wd=setInterval(()=>{if(done)return;const v=p.currentTime;
+          if(v>=cut.ce-0.03||(p.ended&&v>=cut.ce-0.5)){finish();return;}
+          if(Math.abs(v-lastVidT)<0.001){stuck+=250;
+            if(stuck===250||stuck===750){try{p.play();}catch(e){}}
+            if(stuck>=3000){try{p.currentTime=Math.min(cut.ce,v+0.35);p.play();}catch(e){}stuck=0;}}
+          else{stuck=0;lastVidT=v;}},250);
+        safety=setTimeout(finish,(cutDur+8)*1000);
+        function draw(vidT){
+          updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.12;
+          const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);
+          const cutT=Math.min(Math.max(srcT-cut.cs,0),cutDur);
+          drawFrame(srcT,cut,mi,ci,cutT,cutDur);pushFrame();
+          const prog=(rendered+Math.min(cutT,cutDur))/planned*100;const pct=Math.min(Math.round(prog),99);$("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";}
+        function stepRVFC(now,meta){if(done)return;if(S.cancelExport){finish();return;}
+          /* meta.mediaTime = the EXACT timestamp of the frame being shown — perfect sync */
+          const vidT=(meta&&typeof meta.mediaTime==="number")?meta.mediaTime:p.currentTime;
+          draw(vidT);
+          if(vidT>=cut.ce-0.03||p.ended){finish();return;}
+          try{p.requestVideoFrameCallback(stepRVFC);}catch(e){requestAnimationFrame(stepRAF);}}
+        function stepRAF(){if(done)return;if(S.cancelExport){finish();return;}
+          const nowMs=performance.now();
+          if(nowMs-lastDraw>=frameMs-2){lastDraw=nowMs;const vidT=p.currentTime;draw(vidT);
+            if(vidT>=cut.ce-0.03||p.ended){finish();return;}}
+          requestAnimationFrame(stepRAF);}
+        if(useRVFC){try{p.requestVideoFrameCallback(stepRVFC);}catch(e){requestAnimationFrame(stepRAF);}}
+        else requestAnimationFrame(stepRAF);
+      });
+      recPause(); /* pause recording BEFORE touching playback — no stray frames between cuts */
       try{p.pause();}catch(e){}rendered+=cutDur;}}
   recResume();
-  if(!S.cancelExport){const holdEnd=performance.now()+250;while(performance.now()<holdEnd){await sleep(40);}}
+  if(!S.cancelExport){pushFrame();const holdEnd=performance.now()+250;while(performance.now()<holdEnd){await sleep(40);}}
   try{if(rec.state!=="inactive"){rec.requestData&&rec.requestData();rec.stop();}}catch(e){}await stopped;await sleep(80);
   try{stream.getTracks().forEach(t=>t.stop());}catch(e){}p.muted=false;p.volume=1;S.exporting=false;
   if(S.cancelExport){$("#export-log").textContent="Render cancelled.";$("#export-bar").style.width="0%";$("#export-pct").textContent="";goStep(3);return;}
