@@ -174,7 +174,7 @@ async function exportClips(){if(S.exporting)return;
   let cw=720,ch=1280;if(opt.aspect==="1:1"){cw=720;ch=720;}if(opt.aspect==="16:9"){cw=1280;ch=720;}
   const canvas=document.createElement("canvas");canvas.width=cw;canvas.height=ch;
   const ctx=canvas.getContext("2d",{alpha:false});ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="medium";
-  const fps=30;const frameMs=1000/fps;
+  const fps=30;
   /* fps=0 + requestFrame = we only emit a frame when we actually draw it */
   let stream;let vTrack=null;let manualFrames=false;
   try{stream=canvas.captureStream(0);vTrack=stream.getVideoTracks()[0]||null;manualFrames=!!(vTrack&&typeof vTrack.requestFrame==="function");
@@ -238,61 +238,60 @@ async function exportClips(){if(S.exporting)return;
       /* Keep element unmuted so audio graph / captureStream get real samples */
       p.muted=false;p.volume=1;p.playbackRate=1;
       try{await p.play();}catch(e){try{await p.play();}catch(e2){}}
-      /* Let decoder deliver a couple frames + audio before we resume recording */
-      await sleep(120);
-      drawFrame(Math.max(p.currentTime,cut.cs),cut,mi,ci,0,cutDur);
+      /* Wait for playback to settle (~1 frame), then capture first frame */
+      await new Promise(r => {
+        const chk = () => {
+          if (S.cancelExport) { r(); return; }
+          if (p.currentTime > cut.cs + 0.03) r();
+          else requestAnimationFrame(chk);
+        };
+        requestAnimationFrame(chk);
+      });
+      if (S.cancelExport) break;
+      drawFrame(Math.max(p.currentTime, cut.cs), cut, mi, ci, 0, cutDur);
       recResume();
 
-      const t0=performance.now();
-      let lastVidT=p.currentTime;
-      let stuckMs=0;
-      let lastDraw=0;
-      let nudged=false;
+      /* Use requestVideoFrameCallback when available — fires exactly when a new
+         video frame is decoded, so we capture at the source's native frame rate
+         (23.976, 29.97, 30, 60…) with no duplicate or skipped frames. */
+      const hasVFC = typeof p.requestVideoFrameCallback === 'function';
+      let lastFrameT = p.currentTime;
+      const wall0 = performance.now();
 
-      await new Promise(resolve=>{
-        function tick(){
-          if(S.cancelExport){resolve();return;}
-          const nowMs=performance.now();
-          if(nowMs-lastDraw<frameMs-2){requestAnimationFrame(tick);return;}
-          lastDraw=nowMs;
+      await new Promise(resolve => {
+        function captureFrame() {
+          if (S.cancelExport) { resolve(); return; }
 
-          updateFocus(p);FOCUS.x+=(FOCUS.tx-FOCUS.x)*0.10;
-
-          const wall=(nowMs-t0)/1000;
-          let vidT=p.currentTime;
-
-          /* Detect stalls (tab backgrounded / decoder hitch) — recover without hard-seeking
-             into the future (that is what desynced A/V before). */
-          if(Math.abs(vidT-lastVidT)<0.0005){stuckMs+=frameMs;}
-          else{stuckMs=0;lastVidT=vidT;nudged=false;}
-          if(stuckMs>900&&!nudged){
-            nudged=true;stuckMs=0;
-            try{p.playbackRate=1;p.play();}catch(e){}
+          /* Only push a frame when video actually advances — no dupes */
+          const vidT = p.currentTime;
+          if (vidT - lastFrameT < 0.0005) {
+            if (hasVFC) p.requestVideoFrameCallback(captureFrame);
+            else requestAnimationFrame(captureFrame);
+            return;
           }
-          /* Safety only: if still frozen for a long time, skip ahead INSIDE this cut
-             by a tiny amount (not wall-clock jump). */
-          if(stuckMs>2200){
-            try{p.currentTime=Math.min(cut.ce-0.05,Math.max(p.currentTime+0.05,cut.cs));}catch(e){}
-            stuckMs=0;nudged=false;
-          }
+          lastFrameT = vidT;
 
-          /* MASTER CLOCK = video.currentTime (same clock the audio is playing from) */
-          const srcT=Math.min(Math.max(vidT,cut.cs),cut.ce);
-          const cutT=Math.min(Math.max(srcT-cut.cs,0),cutDur);
-          drawFrame(srcT,cut,mi,ci,cutT,cutDur);
+          updateFocus(p); FOCUS.x += (FOCUS.tx - FOCUS.x) * 0.10;
 
-          const prog=(rendered+cutT)/planned*100;
-          const pct=Math.min(Math.round(prog),99);
-          $("#export-bar").style.width=pct+"%";$("#export-pct").textContent=pct+"%";
+          const srcT = Math.min(Math.max(vidT, cut.cs), cut.ce);
+          const cutT = srcT - cut.cs;
+          drawFrame(srcT, cut, mi, ci, cutT, cutDur);
 
-          const doneByVid=vidT>=cut.ce-0.05;
-          const ended=p.ended&&vidT>=cut.ce-0.5;
-          /* Wall is only a safety net if the element never reaches cut.ce (corrupt tail) */
-          const doneBySafety=wall>=cutDur+2.5;
-          if(doneByVid||ended||doneBySafety){resolve();return;}
-          requestAnimationFrame(tick);
+          const prog = (rendered + cutT) / planned * 100;
+          const pct = Math.min(Math.round(prog), 99);
+          $("#export-bar").style.width = pct + "%";
+          $("#export-pct").textContent = pct + "%";
+
+          const doneByVid = vidT >= cut.ce - 0.05;
+          const ended = p.ended && vidT >= cut.ce - 0.5;
+          const doneByWall = (performance.now() - wall0) / 1000 >= cutDur + 2.5;
+          if (doneByVid || ended || doneByWall) { resolve(); return; }
+
+          if (hasVFC) p.requestVideoFrameCallback(captureFrame);
+          else requestAnimationFrame(captureFrame);
         }
-        requestAnimationFrame(tick);
+        if (hasVFC) p.requestVideoFrameCallback(captureFrame);
+        else requestAnimationFrame(captureFrame);
       });
 
       try{p.pause();}catch(e){}
